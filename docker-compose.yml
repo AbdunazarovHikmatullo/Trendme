@@ -1,0 +1,115 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trendme}
+      POSTGRES_USER: ${POSTGRES_USER:-trendme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trendme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trendme} -d ${POSTGRES_DB:-trendme}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./trendme
+    restart: unless-stopped
+    environment:
+      DEBUG: ${DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-changeme}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      POSTGRES_DB: ${POSTGRES_DB:-trendme}
+      POSTGRES_USER: ${POSTGRES_USER:-trendme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trendme}
+      DB_HOST: db
+      DB_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  celery:
+    build: ./trendme
+    restart: unless-stopped
+    entrypoint: ["celery", "-A", "trendme"]
+    command: ["worker", "-l", "info"]
+    environment:
+      DEBUG: ${DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-trendme}
+      POSTGRES_USER: ${POSTGRES_USER:-trendme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trendme}
+      DB_HOST: db
+      DB_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build: ./trendme
+    restart: unless-stopped
+    entrypoint: ["celery", "-A", "trendme"]
+    command: ["beat", "-l", "info"]
+    environment:
+      DEBUG: ${DEBUG:-0}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-trendme}
+      POSTGRES_USER: ${POSTGRES_USER:-trendme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trendme}
+      DB_HOST: db
+      DB_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ml:
+    build: ./ML
+    restart: unless-stopped
+    expose:
+      - "8001"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+      - ml
+
+volumes:
+  postgres_data:

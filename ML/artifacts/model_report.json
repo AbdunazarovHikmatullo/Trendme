@@ -1,0 +1,63 @@
+{
+  "dataset": {
+    "n_weak": 100,
+    "n_mature": 64,
+    "n_total": 164
+  },
+  "binary_cv": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "binary_test": {
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "n_train": 131,
+    "n_test": 33
+  },
+  "strength": {
+    "correlation": 0.5988,
+    "mae": 0.7514
+  },
+  "threshold": 0.5,
+  "high_confidence_threshold": 0.75,
+  "features": [
+    "emergence_ratio",
+    "maturity_ratio",
+    "hype_ratio",
+    "source_trust",
+    "early_source",
+    "has_patent",
+    "has_investment",
+    "novelty",
+    "low_adoption",
+    "growth_rate"
+  ],
+  "weights": {
+    "emergence_ratio": 0.1735621990983361,
+    "maturity_ratio": -1.6252787735627374,
+    "hype_ratio": -0.1852293964004097,
+    "source_trust": 0.3076173985466676,
+    "early_source": 0.617243116893565,
+    "has_patent": 0.03245429374086785,
+    "has_investment": 0.7862747112775638,
+    "novelty": 0.9876067263312657,
+    "low_adoption": 4.354707677602743,
+    "growth_rate": -0.001004159900114794
+  },
+  "directions": {
+    "emergence_ratio": 1,
+    "maturity_ratio": -1,
+    "hype_ratio": -1,
+    "source_trust": 1,
+    "early_source": 1,
+    "has_patent": 1,
+    "has_investment": 1,
+    "novelty": 1,
+    "low_adoption": 1,
+    "growth_rate": -1
+  }
+}
