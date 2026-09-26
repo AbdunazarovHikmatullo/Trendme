@@ -3,7 +3,7 @@
 from celery import chord, group, shared_task
 from django.utils import timezone
 
-from parser.tasks import fetch_arxiv, fetch_openalex
+from parser.tasks import fetch_arxiv, fetch_google_patents, fetch_openalex
 
 from .models import SearchRun
 from .services import build_candidates
@@ -15,7 +15,13 @@ def start_search(run_id: str) -> None:
     run.status = SearchRun.Status.FETCHING
     run.started_at = timezone.now()
     run.save(update_fields=["status", "started_at"])
-    chord(group(fetch_openalex.s(run_id, run.query), fetch_arxiv.s(run_id, run.query)))(finalize_search.s(run_id))
+    chord(
+        group(
+            fetch_openalex.s(run_id, run.query),
+            fetch_arxiv.s(run_id, run.query),
+            fetch_google_patents.s(run_id, run.query),
+        )
+    )(finalize_search.s(run_id))
 
 
 @shared_task

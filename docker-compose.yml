@@ -29,7 +29,9 @@ services:
     environment:
       DEBUG: ${DEBUG:-0}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-changeme}
-      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend,64.188.60.125}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost,http://127.0.0.1,http://64.188.60.125}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1,http://64.188.60.125}
       POSTGRES_DB: ${POSTGRES_DB:-trendme}
       POSTGRES_USER: ${POSTGRES_USER:-trendme}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trendme}

@@ -29,6 +29,18 @@ class SearchRun(models.Model):
 
 
 class TechnologyCandidate(models.Model):
+    class Industry(models.TextChoices):
+        INDUSTRIAL_AI = "industrial_ai", "Индустриальный ИИ"
+        ROBOTICS = "robotics", "Робототехника"
+        INFRASTRUCTURE = "infrastructure", "Инфраструктура ИИ"
+        FINTECH = "fintech", "Финтех"
+        AI_SECURITY = "ai_security", "Защита ИИ"
+        EDGE = "edge", "Edge Computing"
+        SEMICONDUCTOR = "semiconductor", "Полупроводники"
+        ENERGY = "energy", "Энергетика"
+        HEALTH = "health", "Здравоохранение / Биотех"
+        OTHER = "other", "Другое"
+
     run = models.ForeignKey(SearchRun, on_delete=models.CASCADE, related_name="candidates")
     title = models.TextField()
     description = models.TextField(blank=True)
@@ -39,9 +51,15 @@ class TechnologyCandidate(models.Model):
     is_high_confidence = models.BooleanField(default=False)
     explanation = models.TextField(blank=True)
     factors = models.JSONField(default=list, blank=True)
+    industry = models.CharField(
+        max_length=32, choices=Industry.choices, default=Industry.OTHER, blank=True,
+    )
     source_documents = models.ManyToManyField("parser.SourceDocument", related_name="candidates")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-confidence", "title"]
-        indexes = [models.Index(fields=["run", "is_weak_signal", "confidence"])]
+        indexes = [
+            models.Index(fields=["run", "is_weak_signal", "confidence"]),
+            models.Index(fields=["run", "industry"]),
+        ]

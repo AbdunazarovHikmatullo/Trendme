@@ -18,10 +18,11 @@ class SourceDocumentSerializer(serializers.ModelSerializer):
 
 class CandidateSerializer(serializers.ModelSerializer):
     sources = SourceDocumentSerializer(source="source_documents", many=True, read_only=True)
+    industry_label = serializers.CharField(source="get_industry_display", read_only=True)
 
     class Meta:
         model = TechnologyCandidate
-        fields = ("id", "title", "description", "potential_benefit", "case_example", "confidence", "is_weak_signal", "is_high_confidence", "explanation", "factors", "sources")
+        fields = ("id", "title", "description", "potential_benefit", "case_example", "confidence", "is_weak_signal", "is_high_confidence", "explanation", "factors", "industry", "industry_label", "sources")
 
 
 class SearchRunSerializer(serializers.ModelSerializer):

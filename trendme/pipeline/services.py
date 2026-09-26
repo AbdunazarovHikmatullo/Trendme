@@ -35,6 +35,143 @@ QUERY_ALIASES = {
     "кибербезопас": ("cybersecurity", "cyber security"),
 }
 
+# Классификатор отраслей: ключ — industry value, значение — список ключевых слов.
+# Слова сортированы по приоритету: чем выше в списке, тем сильнее сигнал.
+INDUSTRY_KEYWORDS: dict[str, list[str]] = {
+    "industrial_ai": [
+        "industrial ai", "industrial ai", "промышленный ии", "промышленный искусственный интеллект",
+        "manufacturing ai", "manufacturing quality", "factory automation", "factory automation",
+        "industrial robot", "industrial robot", "production line", "production line",
+        "industrial inspection", "industrial inspection", "process optimization",
+        "industrial agent", "industrial agent", "ot agent", "ot agent",
+        "plc", "scada", "mes", "erp", "digital twin", "digital twin",
+        "cad-native", "generative design", "engineering intelligence",
+        "autonomous welding", "autonomous welding", "adaptive welding",
+        "vision foundation", "quality control", "defect detection",
+        "robotics foundation model", "robotics foundation model",
+        "vla model", "supply chain agent", "supply chain agent",
+        "thermal management", "data center cooling", "data center cooling",
+        "thermal ai", "proactive cooling", "virtual power plant", "vpp",
+        "bess optimization", "virtual power plant", "vpp",
+        "grid optimization", "grid optimization", "energy trading",
+    ],
+    "robotics": [
+        "robot", "robot", "robotics", "робот", "робототехник", "робототехника",
+        "quadruped", "quadruped", "humanoid", "humanoid", "dexterous hand",
+        "dexterous hand", "robotic hand", "robotic hand", "grippers",
+        "swarm robot", "swarm robot", "swarm robotics", "swarm robotics",
+        "field robot", "field robot", "agricultural robot", "agricultural robot",
+        "inspection robot", "inspection robot", "mobile robot", "mobile robot",
+        "robot app store", "robot app store", "robot skill marketplace",
+        "teleoperation", "teleoperation", "data-as-a-service", "data-as-a-service",
+        "embodied ai", "embodied ai", "robot learning", "robot learning",
+        "manipulator", "manipulator", "actuator", "actuator",
+        "neuromorphic", "neuromorphic", "brain-inspired", "brain-inspired",
+    ],
+    "infrastructure": [
+        "infrastructure", "инфраструктур", "инфраструктур",
+        "data center", "data center", "ai fabric", "ai fabric",
+        "optical switch", "optical switch", "o cs", "o cs",
+        "wafer scale", "wafer scale", "wafer-scale", "wafer-scale",
+        "kv cache", "kv cache", "kv offload", "kv offload",
+        "icmsp", "nixl", "dynamo",
+        "sovereign cloud", "sovereign cloud", "air-gapped", "air-gapped",
+        "smr", "small modular reactor", "small modular reactor", "nuclear",
+        "hbm", "high bandwidth memory", "high bandwidth memory",
+        "compute cluster", "compute cluster", "ai cluster", "ai cluster",
+        "interconnect", "interconnect", "infiniband", "infiniband",
+        "optical interconnect", "optical interconnect",
+        "space computing", "space computing", "orbital", "orbital",
+        "edge data center", "edge data center",
+    ],
+    "fintech": [
+        "fintech", "финтех", "финтех", "banking", "banking", "core banking",
+        "core banking", "lending", "lending", "credit scoring", "credit scoring",
+        "onchain credit", "onchain credit", "deFi", "deFi", "defi",
+        "debt collection", "debt collection", "voice agent", "voice agent",
+        "payment", "payment", "remittance", "remittance",
+        "kyb", "kyb", "kyc", "kyc", "identity verification",
+        "banking os", "banking os", "banking infrastructure",
+        "sovereign ai", "sovereign ai",
+    ],
+    "ai_security": [
+        "security", "безопаснос", "безопаснос", "ai security", "ai security",
+        "prompt injection", "prompt injection", "red teaming", "red teaming",
+        "mcp security", "mcp security", "tool poisoning", "tool poisoning",
+        "llm firewall", "llm firewall", "ai governance", "ai governance",
+        "ai compliance", "ai compliance", "eu ai act", "eu ai act",
+        "privacy enhancing", "privacy enhancing", "differential privacy",
+        "synthetic data", "synthetic data", "confidential inference",
+        "confidential inference", "tee", "trusted execution environment",
+        "trusted execution environment", "remote attestation",
+        "watermarking", "watermarking", "deepfake detection", "deepfake detection",
+        "identity verification", "identity verification", "liveness",
+        "agent identity", "agent identity", "agent access", "agent access",
+        "self-healing", "self-healing", "injection defense",
+    ],
+    "edge": [
+        "edge", "edge", "edge ai", "edge ai", "edge computing", "edge computing",
+        "on-device", "on-device", "on-device intelligence", "on-device intelligence",
+        "tinyml", "tinyml", "npu", "npu", "neupro", "neupro",
+        "jetson", "jetson", "nrf54", "nrf54", "axon", "axon",
+        "federated learning", "federated learning", "federated learning",
+        "orbital", "orbital", "satellite", "satellite",
+        "iot", "iot", "sensor fusion", "sensor fusion",
+        "event-based vision", "event-based vision", "event camera",
+        "event camera", "neuromorphic vision", "neuromorphic vision",
+        "model compression", "model compression", "model compression",
+        "edge inference", "edge inference", "edge inference",
+        "edge llm", "edge llm", "edge llm",
+        "edge-железе", "edge-железе", "edge-железе",
+    ],
+    "semiconductor": [
+        "semiconductor", "полупроводник", "полупроводник", "chip", "chip",
+        "npu", "npu", "npu", "npu", "accelerator", "accelerator",
+        "xpu", "xpu", "xpu", "xpu", "vla chip", "vla chip",
+        "hyperaccel", "hyperaccel", "brainchip", "brainchip", "hailo", "hailo",
+        "ceres", "ceres", "cerebras", "cerebras", "cs-4", "cs-4",
+        "wafer scale", "wafer scale", "3d stack", "3d stack",
+        "sram", "sr", "sr", "dr", "dr",
+        "compilation", "compilation", "compiler", "compiler",
+        "mojo", "mojo", "modular", "modular", "luminal", "luminal",
+        "brium", "brium", "yasp", "yasp",
+    ],
+    "energy": [
+        "energy", "энергетик", "энергетик", "nuclear", "nuclear", "smr",
+        "smr", "small modular reactor", "small modular reactor",
+        "fusion", "fusion", "battery", "battery", "battery",
+        "bess", "bess", "virtual power plant", "virtual power plant",
+        "vpp", "vpp", "grid optimization", "grid optimization",
+        "geothermal", "geothermal", "solar", "solar",
+        "cooling", "cooling", "data center cooling", "data center cooling",
+        "pue", "pue", "liquid cooling", "liquid cooling",
+        "mining", "mining", "mineral exploration", "mineral exploration",
+        "earth ai", "earth ai", "geologic", "geologic",
+        "climate tech", "climate tech", "sustainability", "sustainability",
+    ],
+    "health": [
+        "health", "здравоохранен", "здравоохранен", "biotech", "biotech",
+        "biomedical", "biomedical", "medical", "medical",
+        "drug discovery", "drug discovery", "genomics", "genomics",
+        "proteomics", "proteomics", "synthetic biology", "synthetic biology",
+        "clinical trial", "clinical trial", "diagnostics", "diagnostics",
+        "medical device", "medical device", "healthcare ai", "healthcare ai",
+    ],
+}
+
+
+def classify_industry(title: str, description: str) -> str:
+    """Определяет отрасль кандидата по ключевым словам в названии и описании."""
+    text = (title + " " + description).casefold()
+    scores: dict[str, int] = {}
+    for industry, keywords in INDUSTRY_KEYWORDS.items():
+        count = sum(1 for kw in keywords if kw in text)
+        if count > 0:
+            scores[industry] = count
+    if not scores:
+        return TechnologyCandidate.Industry.OTHER.value
+    return max(scores, key=scores.get)
+
 
 @dataclass
 class CandidateGroup:
@@ -184,6 +321,7 @@ def build_candidates(run: SearchRun) -> tuple[int, int, int, list[str]]:
             scored.append((prediction, observation, documents))
 
     for prediction, observation, documents in sorted(scored, key=lambda item: item[0]["confidence"], reverse=True)[:MAX_CANDIDATES]:
+        industry = classify_industry(observation["title"], observation["description"])
         candidate = TechnologyCandidate.objects.create(
             run=run,
             title=observation["title"],
@@ -195,6 +333,7 @@ def build_candidates(run: SearchRun) -> tuple[int, int, int, list[str]]:
             is_high_confidence=prediction["confidence"] >= 0.75,
             explanation=prediction["explanation"],
             factors=prediction["factors"],
+            industry=industry,
         )
         candidate.source_documents.set(documents)
         created_count += 1

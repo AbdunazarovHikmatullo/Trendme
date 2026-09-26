@@ -3,7 +3,7 @@
 from celery import shared_task
 
 from .models import SourceDocument
-from .services import arxiv, openalex
+from .services import arxiv, google_patents, openalex
 
 
 def _store(run_id: str, documents: list[dict]) -> int:
@@ -30,3 +30,11 @@ def fetch_arxiv(run_id: str, query: str) -> dict:
         return {"provider": "arxiv", "stored": _store(run_id, arxiv(query))}
     except Exception as error:  # ошибка одного источника не отменяет весь поиск
         return {"provider": "arxiv", "stored": 0, "error": str(error)}
+
+
+@shared_task
+def fetch_google_patents(run_id: str, query: str) -> dict:
+    try:
+        return {"provider": "google_patents", "stored": _store(run_id, google_patents(query))}
+    except Exception as error:  # ошибка одного источника не отменяет весь поиск
+        return {"provider": "google_patents", "stored": 0, "error": str(error)}

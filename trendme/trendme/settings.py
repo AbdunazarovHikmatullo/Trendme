@@ -29,9 +29,9 @@ SECRET_KEY = os.environ.get(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', '1') == '1'
 
-ALLOWED_HOSTS = os.environ.get(
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get(
     'DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1'
-).split(',')
+).split(',') if host.strip()]
 
 
 # Application definition
@@ -136,8 +136,15 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = os.environ.get('STATIC_ROOT', BASE_DIR / 'staticfiles')
 
-# CORS
-CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', '1') == '1'
+# В production frontend и API работают с одного origin через Nginx. Список
+# сохраняет возможность обращаться к API напрямую с разрешённых адресов.
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get(
+    'CORS_ALLOWED_ORIGINS', 'http://localhost,http://127.0.0.1,http://64.188.60.125'
+).split(',') if origin.strip()]
+CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in os.environ.get(
+    'DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost,http://127.0.0.1,http://64.188.60.125'
+).split(',') if origin.strip()]
 
 # Django REST Framework
 REST_FRAMEWORK = {
