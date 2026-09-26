@@ -31,7 +31,8 @@ def finalize_search(fetch_results: list[dict], run_id: str) -> None:
     run.save(update_fields=["status"])
     fetch_errors = [result["error"] for result in fetch_results if result.get("error")]
     try:
-        count, weak, high, ml_errors = build_candidates(run)
+        industry = run.industry_filter or None
+        count, weak, high, ml_errors = build_candidates(run, industry_filter=industry)
         run.processed_sources = run.documents.count()
         run.candidates_count = count
         run.weak_signals_count = weak

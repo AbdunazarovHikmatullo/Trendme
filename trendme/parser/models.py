@@ -15,6 +15,7 @@ class SourceDocument(models.Model):
     source_type = models.CharField(max_length=32)
     language = models.CharField(max_length=16, blank=True)
     trust = models.FloatField()
+    categories = models.JSONField(default=list, blank=True)
     raw_payload = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

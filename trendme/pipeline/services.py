@@ -35,6 +35,110 @@ QUERY_ALIASES = {
     "кибербезопас": ("cybersecurity", "cyber security"),
 }
 
+# Маппинг категорий источников → наши 10 отраслей
+# OpenAlex topics, arXiv categories, IPC/CPC коды
+SOURCE_CATEGORY_MAP: dict[str, str] = {
+    # --- OpenAlex fields ---
+    "field-computer science": "industrial_ai",
+    "field-artificial intelligence": "industrial_ai",
+    "field-engineering": "infrastructure",
+    "field-electrical and electronic engineering": "semiconductor",
+    "field-physics and astronomy": "semiconductor",
+    "subfield-computer science": "industrial_ai",
+    "subfield-artificial intelligence": "industrial_ai",
+    "subfield-computer networks and communications": "infrastructure",
+    "subfield-hardware and architecture": "semiconductor",
+    "subfield-theory of computation": "infrastructure",
+    "subfield-human-computer interaction": "edge",
+    "subfield-information systems": "fintech",
+    "subfield-databases": "infrastructure",
+    "subfield-cryptography and security": "ai_security",
+    "subfield-machine learning": "industrial_ai",
+    "subfield-computer vision": "industrial_ai",
+    "subfield-robotics": "robotics",
+    "subfield-control and systems engineering": "infrastructure",
+    "subfield-numerical analysis": "infrastructure",
+    "subfield-statistics and probability": "industrial_ai",
+    "subfield-economics and econometrics": "fintech",
+    "subfield-finance": "fintech",
+    "subfield-accounting": "fintech",
+    "subfield-physics": "semiconductor",
+    "subfield-materials science": "semiconductor",
+    "subfield-energy": "energy",
+    "subfield-biotechnology": "health",
+    "subfield-medicine": "health",
+    "subfield-health": "health",
+    "subfield-pharmacology": "health",
+    "subfield-agricultural and biological engineering": "energy",
+    "subfield-mechanical engineering": "robotics",
+    "subfield-chemical engineering": "energy",
+    # --- arXiv categories ---
+    "cs.AI": "industrial_ai",
+    "cs.LG": "industrial_ai",
+    "cs.RO": "robotics",
+    "cs.CV": "industrial_ai",
+    "cs.CR": "ai_security",
+    "cs.SE": "industrial_ai",
+    "cs.DB": "infrastructure",
+    "cs.DC": "infrastructure",
+    "cs.NE": "semiconductor",
+    "cs.MA": "robotics",
+    "cs.SD": "industrial_ai",
+    "cs.HC": "edge",
+    "cs.IR": "industrial_ai",
+    "cs.DS": "infrastructure",
+    "cs.PL": "infrastructure",
+    "cs.AR": "semiconductor",
+    "cs.ET": "infrastructure",
+    "cs.OH": "industrial_ai",
+    "stat.ML": "industrial_ai",
+    "econ.EM": "fintech",
+    "q.Bio": "health",
+    "physics.comp-ph": "semiconductor",
+    "physics.ins-det": "edge",
+    "eess.SP": "edge",
+    "eess.SY": "infrastructure",
+    # --- IPC/CPC codes ---
+    "G06N": "industrial_ai",
+    "G06N3": "industrial_ai",
+    "G06N20": "ai_security",
+    "G06Q": "fintech",
+    "G06Q40": "fintech",
+    "H04L": "ai_security",
+    "H04L9": "ai_security",
+    "H04L63": "ai_security",
+    "H01L": "semiconductor",
+    "H01L21": "semiconductor",
+    "B25J": "robotics",
+    "B25J13": "robotics",
+    "B25J9": "robotics",
+    "B25J11": "robotics",
+    "B60L": "energy",
+    "B60K": "energy",
+    "F24D": "energy",
+    "F24F": "energy",
+    "A61B": "health",
+    "A61K": "health",
+    "A61P": "health",
+    "C12M": "health",
+    "C12N": "health",
+    "G01N": "health",
+    "G06F": "infrastructure",
+    "G06F1": "edge",
+    "G06F16": "infrastructure",
+    "G06F21": "ai_security",
+    "G05B": "infrastructure",
+    "G06T": "industrial_ai",
+    "G05B23": "infrastructure",
+    "H02J": "energy",
+    "H02S": "energy",
+    "H03M": "ai_security",
+    "H04B": "infrastructure",
+    "H04W": "edge",
+    "H05K": "semiconductor",
+    "Y02T": "energy",
+}
+
 # Классификатор отраслей: ключ — industry value, значение — список ключевых слов.
 # Слова сортированы по приоритету: чем выше в списке, тем сильнее сигнал.
 INDUSTRY_KEYWORDS: dict[str, list[str]] = {
@@ -173,6 +277,23 @@ def classify_industry(title: str, description: str) -> str:
     return max(scores, key=scores.get)
 
 
+def _categories_to_industry(categories: list[str]) -> str | None:
+    """Маппинг категорий источников → наша отрасль.
+    
+    Возвращает industry value (например 'fintech') или None если не определилось.
+    """
+    for cat in categories:
+        cat_lower = cat.lower().strip()
+        # Прямое совпадение
+        if cat_lower in SOURCE_CATEGORY_MAP:
+            return SOURCE_CATEGORY_MAP[cat_lower]
+        # Частичное совпадение (IPC-код начинается с префикса)
+        for key, industry in SOURCE_CATEGORY_MAP.items():
+            if cat_lower.startswith(key.lower()):
+                return industry
+    return None
+
+
 @dataclass
 class CandidateGroup:
     documents: list[SourceDocument]
@@ -296,8 +417,13 @@ def _predict(observation: dict) -> dict:
     return body["predictions"][0]
 
 
-def build_candidates(run: SearchRun) -> tuple[int, int, int, list[str]]:
-    """Фильтрует и ранжирует не более 15 подтверждённых слабых сигналов."""
+def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tuple[int, int, int, list[str]]:
+    """Фильтрует и ранжирует не более 15 подтверждённых слабых сигналов.
+    
+    Args:
+        run: SearchRun объект
+        industry_filter: если задан, фильтрует кандидатов по отрасли (например 'fintech')
+    """
     query_terms = _query_terms(run.query)
     selected_documents = [
         document for document in run.documents.all().order_by("-published_date")
@@ -317,11 +443,22 @@ def build_candidates(run: SearchRun) -> tuple[int, int, int, list[str]]:
         except Exception as error:
             errors.append(f"ML: {error}")
             continue
-        if prediction["weak_signal"]:
-            scored.append((prediction, observation, documents))
+        if not prediction["weak_signal"]:
+            continue
+        # Определяем отрасль из категорий источников
+        all_categories: list[str] = []
+        for doc in documents:
+            all_categories.extend(doc.categories or [])
+        predicted_industry = _categories_to_industry(all_categories)
+        if predicted_industry is None:
+            # Fallback: определяем по ключевым словам
+            predicted_industry = classify_industry(observation["title"], observation["description"])
+        # Фильтруем по отрасли если задан фильтр
+        if industry_filter and predicted_industry != industry_filter:
+            continue
+        scored.append((prediction, observation, documents))
 
     for prediction, observation, documents in sorted(scored, key=lambda item: item[0]["confidence"], reverse=True)[:MAX_CANDIDATES]:
-        industry = classify_industry(observation["title"], observation["description"])
         candidate = TechnologyCandidate.objects.create(
             run=run,
             title=observation["title"],
@@ -333,7 +470,7 @@ def build_candidates(run: SearchRun) -> tuple[int, int, int, list[str]]:
             is_high_confidence=prediction["confidence"] >= 0.75,
             explanation=prediction["explanation"],
             factors=prediction["factors"],
-            industry=industry,
+            industry=predicted_industry,
         )
         candidate.source_documents.set(documents)
         created_count += 1

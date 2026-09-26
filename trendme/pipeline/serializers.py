@@ -30,8 +30,25 @@ class SearchRunSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SearchRun
-        fields = ("id", "query", "status", "processed_sources", "candidates_count", "weak_signals_count", "high_confidence_count", "errors", "created_at", "started_at", "completed_at", "candidates")
+        fields = ("id", "query", "industry_filter", "status", "processed_sources", "candidates_count", "weak_signals_count", "high_confidence_count", "errors", "created_at", "started_at", "completed_at", "candidates")
 
 
 class CreateSearchSerializer(serializers.Serializer):
     query = serializers.CharField(max_length=300, min_length=2, trim_whitespace=True)
+    industry = serializers.ChoiceField(
+        choices=[
+            ("industrial_ai", "Индустриальный ИИ"),
+            ("robotics", "Робототехника"),
+            ("infrastructure", "Инфраструктура ИИ"),
+            ("fintech", "Финтех"),
+            ("ai_security", "Защита ИИ"),
+            ("edge", "Edge Computing"),
+            ("semiconductor", "Полупроводники"),
+            ("energy", "Энергетика"),
+            ("health", "Здравоохранение"),
+            ("other", "Другое"),
+        ],
+        required=False,
+        allow_null=True,
+        default=None,
+    )

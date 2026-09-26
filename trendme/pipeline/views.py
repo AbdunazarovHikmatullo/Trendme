@@ -11,7 +11,9 @@ class SearchCollectionView(APIView):
     def post(self, request):
         serializer = CreateSearchSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        run = SearchRun.objects.create(query=serializer.validated_data["query"])
+        validated = serializer.validated_data
+        industry = validated.get("industry") or ""
+        run = SearchRun.objects.create(query=validated["query"], industry_filter=industry)
         start_search.delay(str(run.id))
         return Response(SearchRunSerializer(run).data, status=status.HTTP_202_ACCEPTED)
 

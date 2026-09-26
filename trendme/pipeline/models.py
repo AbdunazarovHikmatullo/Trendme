@@ -14,6 +14,7 @@ class SearchRun(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     query = models.CharField(max_length=300)
+    industry_filter = models.CharField(max_length=32, blank=True, default="")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
     processed_sources = models.PositiveIntegerField(default=0)
     candidates_count = models.PositiveIntegerField(default=0)

@@ -67,15 +67,39 @@ def openalex(query: str, limit: int = 30) -> list[dict[str, Any]]:
         if not title or not identifier:
             continue
         location = item.get("primary_location") or {}
+        # Извлекаем категории из primary_topic или topics
+        categories = _extract_openalex_categories(item)
         documents.append({
             "provider": "openalex", "external_id": identifier, "title": title,
             "abstract": _abstract(item.get("abstract_inverted_index")),
             "url": str(item.get("doi") or location.get("landing_page_url") or item["id"]),
             "published_date": _parse_date(item.get("publication_date")),
             "source_name": "OpenAlex", "source_type": "academic",
-            "language": str(item.get("language") or ""), "trust": 0.95, "raw_payload": item,
+            "language": str(item.get("language") or ""), "trust": 0.95,
+            "raw_payload": item,
+            "categories": categories,
         })
     return documents
+
+
+def _extract_openalex_categories(item: dict) -> list[str]:
+    """Извлекает категории из OpenAlex: primary_topic → subfield → field."""
+    cats: list[str] = []
+    pt = item.get("primary_topic") or {}
+    if pt:
+        sub = pt.get("subfield") or {}
+        if isinstance(sub, dict):
+            cats.append(sub.get("id", "").replace("subfield.", "subfield-"))
+            cats.append(sub.get("display_name", ""))
+        field = pt.get("field") or {}
+        if isinstance(field, dict):
+            cats.append(field.get("id", "").replace("field.", "field-"))
+            cats.append(field.get("display_name", ""))
+    # Дополнительно: первые 3 topics
+    for topic in (item.get("topics") or [])[:3]:
+        if isinstance(topic, dict):
+            cats.append(topic.get("id", "").replace("topic.", "topic-"))
+    return [c for c in cats if c]
 
 
 def arxiv(query: str, limit: int = 30) -> list[dict[str, Any]]:
@@ -88,6 +112,8 @@ def arxiv(query: str, limit: int = 30) -> list[dict[str, Any]]:
         title = " ".join((entry.findtext("atom:title", default="", namespaces=namespace) or "").split())
         if not title or not identifier:
             continue
+        # Извлекаем arXiv категории
+        categories = _extract_arxiv_categories(entry, namespace)
         documents.append({
             "provider": "arxiv", "external_id": identifier, "title": title,
             "abstract": " ".join((entry.findtext("atom:summary", default="", namespaces=namespace) or "").split()),
@@ -95,8 +121,19 @@ def arxiv(query: str, limit: int = 30) -> list[dict[str, Any]]:
             "published_date": _parse_date(entry.findtext("atom:published", default="", namespaces=namespace)),
             "source_name": "arXiv", "source_type": "preprint", "language": "en", "trust": 0.85,
             "raw_payload": {"id": identifier},
+            "categories": categories,
         })
     return documents
+
+
+def _extract_arxiv_categories(entry: Any, namespace: dict) -> list[str]:
+    """Извлекает arXiv категории из Atom XML."""
+    cats: list[str] = []
+    for cat in entry.findall("atom:category", namespace):
+        term = cat.get("term", "")
+        if term:
+            cats.append(term)
+    return cats
 
 
 def google_patents(query: str, limit: int = 30) -> list[dict[str, Any]]:
@@ -119,7 +156,7 @@ def google_patents(query: str, limit: int = 30) -> list[dict[str, Any]]:
         if not title or not link:
             continue
 
-        abstract, pub_date = _extract_patent_details(link)
+        abstract, pub_date, ipc_codes = _extract_patent_details(link)
         external_id = _extract_patent_id(link)
 
         documents.append({
@@ -134,6 +171,7 @@ def google_patents(query: str, limit: int = 30) -> list[dict[str, Any]]:
             "language": "en",
             "trust": 0.95,
             "raw_payload": {"link": link, "title": title},
+            "categories": ipc_codes,
         })
     return documents
 
@@ -147,17 +185,38 @@ def _extract_patent_id(url: str) -> str:
     return ""
 
 
-def _extract_patent_details(url: str) -> tuple[str, str | None]:
-    """Извлекает abstract и publication date со страницы патента."""
+def _extract_patent_details(url: str) -> tuple[str, str | None, list[str]]:
+    """Извлекает abstract, publication date и IPC-коды со страницы патента."""
     abstract = ""
     pub_date: str | None = None
+    ipc_codes: list[str] = []
     try:
         html = _request(url, "text/html", timeout=15).decode("utf-8")
         abstract = _parse_html_section(html, "abstract")
         pub_date = _parse_html_date(html)
+        ipc_codes = _extract_ipc_codes(html)
     except Exception:
         pass
-    return abstract, pub_date
+    return abstract, pub_date, ipc_codes
+
+
+def _extract_ipc_codes(html: str) -> list[str]:
+    """Извлекает IPC/CPC коды из HTML страницы Google Patents."""
+    import re as _re
+    codes: list[str] = []
+    # IPC коды: G06N 3/04, H04L 9/40 и т.д.
+    ipc_pattern = r'\b([A-Z]\d{2}[A-Z]?\s*\d{1,2}/\d{2})\b'
+    for match in _re.finditer(ipc_pattern, html):
+        code = match.group(1).replace(" ", "").replace("/", "-")
+        if code and code not in codes:
+            codes.append(code)
+    # CPC коды: G06N 2024.01
+    cpc_pattern = r'\b([A-Z]\d{2}[A-Z]?\s*\d{4}\.\d{2})\b'
+    for match in _re.finditer(cpc_pattern, html):
+        code = match.group(1).replace(" ", "").replace(".", "-")
+        if code and code not in codes:
+            codes.append(code)
+    return codes[:10]  # ограничиваем до 10 кодов
 
 
 def _parse_html_section(html: str, section_id: str) -> str:
