@@ -32,4 +32,10 @@ class SearchDetailView(APIView):
         run = SearchRun.objects.prefetch_related("candidates__source_documents").filter(pk=run_id).first()
         if run is None:
             return Response({"detail": "Запуск поиска не найден."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(SearchRunSerializer(run).data)
+        data = SearchRunSerializer(run).data
+        # Фильтрация кандидатов по категории на уровне API
+        category = request.query_params.get("category", "all")
+        if category and category != "all":
+            candidates = [c for c in data["candidates"] if c["industry"] == category]
+            data["candidates"] = candidates
+        return Response(data)

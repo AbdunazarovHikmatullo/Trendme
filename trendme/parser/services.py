@@ -137,35 +137,41 @@ def _extract_arxiv_categories(entry: Any, namespace: dict) -> list[str]:
 
 
 def google_patents(query: str, limit: int = 30) -> list[dict[str, Any]]:
-    """Получает патенты через Google Patents RSS + извлекает аннотации со страниц."""
-    params = urlencode({"q": query, "max": limit})
-    rss_url = f"https://www.google.com/patents/rss?q={params}"
+    """Получает патенты через Google Patents search page (RSS деPRECATED)."""
+    params = urlencode({"q": query})
+    search_url = f"https://patents.google.com/?q={params}&num={limit}"
     try:
-        raw = _request(rss_url, "application/atom+xml")
+        html = _request(search_url, "text/html", timeout=20).decode("utf-8")
     except Exception:
         return []
 
-    namespace = {"atom": "http://www.w3.org/2005/Atom"}
-    root = ElementTree.fromstring(raw.decode("utf-8"))
-    entries = root.findall("atom:entry", namespace)
-
     documents: list[dict[str, Any]] = []
-    for entry in entries:
-        link = (entry.findtext("atom:link", default="", namespaces=namespace) or "").strip()
-        title = " ".join((entry.findtext("atom:title", default="", namespaces=namespace) or "").split())
+    # Парсим результаты поиска Google Patents
+    # Структура: <div class="gsc-result"> или <div class="gs_ri">
+    result_pattern = r'<div[^>]*class="gs_ri"[^>]*>(.*?)</div>\s*</div>\s*</div>'
+    results = re.findall(result_pattern, html, re.DOTALL)
+
+    for result_html in results[:limit]:
+        title = _extract_text_from_html(result_html, 'a', 'gs_rt')
+        link = _extract_href_from_html(result_html, 'a', 'gs_rt')
+        abstract = _extract_text_from_html(result_html, 'div', 'gs_rs')
+
         if not title or not link:
             continue
 
-        abstract, pub_date, ipc_codes = _extract_patent_details(link)
-        external_id = _extract_patent_id(link)
+        # Извлекаем IPC-коды из строки результатов
+        ipc_codes = _extract_ipc_codes_from_search(result_html)
+
+        # Извлекаем дату публикации
+        pub_date = _extract_date_from_search(result_html)
 
         documents.append({
             "provider": "google_patents",
-            "external_id": external_id or link,
+            "external_id": _extract_patent_id(link) or link,
             "title": title,
             "abstract": " ".join(abstract.split()) if abstract else "",
             "url": link,
-            "published_date": _parse_date(pub_date) or pub_date,
+            "published_date": _parse_date(pub_date),
             "source_name": "Google Patents",
             "source_type": "patent",
             "language": "en",
@@ -174,6 +180,70 @@ def google_patents(query: str, limit: int = 30) -> list[dict[str, Any]]:
             "categories": ipc_codes,
         })
     return documents
+
+
+def _extract_text_from_html(html: str, tag: str, cls: str) -> str:
+    """Извлекает текст из HTML по тегу и классу."""
+    pattern = rf'<{tag}[^>]*class="{cls}"[^>]*>(.*?)</{tag}>'
+    match = re.search(pattern, html, re.DOTALL | re.IGNORECASE)
+    if match:
+        text = re.sub(r'<[^>]+>', ' ', match.group(1))
+        return text.strip()
+    return ""
+
+
+def _extract_href_from_html(html: str, tag: str, cls: str) -> str:
+    """Извлекает href из HTML по тегу и классу."""
+    pattern = rf'<{tag}[^>]*class="{cls}"[^>]*href="([^"]+)"'
+    match = re.search(pattern, html, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def _extract_ipc_codes_from_search(html: str) -> list[str]:
+    """Извлекает IPC-коды из строки результатов поиска Google Patents."""
+    import re as _re
+    codes: list[str] = []
+    # IPC коды в результатах поиска: G06N 3/04, H04L 9/40 и т.д.
+    ipc_pattern = r'\b([A-Z]\d{2}[A-Z]?\s*\d{1,2}/\d{2})\b'
+    for match in _re.finditer(ipc_pattern, html):
+        code = match.group(1).replace(" ", "").replace("/", "-")
+        if code and code not in codes:
+            codes.append(code)
+    # CPC коды: G06N 2024.01
+    cpc_pattern = r'\b([A-Z]\d{2}[A-Z]?\s*\d{4}\.\d{2})\b'
+    for match in _re.finditer(cpc_pattern, html):
+        code = match.group(1).replace(" ", "").replace(".", "-")
+        if code and code not in codes:
+            codes.append(code)
+    return codes[:10]
+
+
+def _extract_date_from_search(html: str) -> str | None:
+    """Извлекает дату публикации из строки результатов поиска."""
+    import re as _re
+    # Ищем паттерны даты в результатах поиска
+    patterns = [
+        r'(\d{4}-\d{2}-\d{2})',
+        r'Published:\s*(\d{4})\s+(\w+)\s+(\d{1,2})',
+    ]
+    for pattern in patterns:
+        match = _re.search(pattern, html, _re.IGNORECASE)
+        if match:
+            date_str = match.group(1)
+            if len(date_str) == 4:
+                months = {
+                    "january": "01", "february": "02", "march": "03", "april": "04",
+                    "may": "05", "june": "06", "july": "07", "august": "08",
+                    "september": "09", "october": "10", "november": "11", "december": "12",
+                }
+                month_num = months.get(match.group(2).lower())
+                if month_num:
+                    day = match.group(3).zfill(2)
+                    return f"{date_str}-{month_num}-{day}"
+            return date_str
+    return None
 
 
 def _extract_patent_id(url: str) -> str:
