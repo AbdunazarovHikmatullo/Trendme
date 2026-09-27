@@ -181,7 +181,7 @@ def _extract_arxiv_categories(entry: Any, namespace: dict) -> list[str]:
 
 def build_google_patents_url(query: str, limit: int = 20) -> str:
     """Собирает JSON-endpoint Google Patents (внутренний xhr/query, без API-ключа)."""
-    inner = f"q={quote(query, safe='')}&num={min(max(limit, 1), 100)}&page=0&sort=new"
+    inner = f"q={quote(query, safe='')}&num={min(max(limit, 1), 100)}&page=0"
     return f"https://patents.google.com/xhr/query?url={quote(inner, safe='')}&exp="
 
 
