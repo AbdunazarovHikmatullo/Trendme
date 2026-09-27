@@ -10,6 +10,7 @@ from datetime import date
 from urllib.request import Request, urlopen
 
 from parser.models import SourceDocument
+from parser.services import SOURCE_QUERY_ALIASES
 
 from .models import SearchRun, TechnologyCandidate
 
@@ -28,12 +29,7 @@ STOP_WORDS = {
 
 # Минимальный словарь нужен, чтобы русскоязычный запрос находил англоязычные
 # публикации. Расширяем его постепенно на основании журнала поисков.
-QUERY_ALIASES = {
-    "квантов": ("quantum",),
-    "сенсор": ("sensor", "sensing"),
-    "финтех": ("fintech", "financial technology"),
-    "кибербезопас": ("cybersecurity", "cyber security"),
-}
+QUERY_ALIASES = SOURCE_QUERY_ALIASES
 
 # Маппинг категорий источников → наши 10 отраслей
 # OpenAlex topics, arXiv categories, IPC/CPC коды
@@ -336,8 +332,11 @@ def _is_relevant(document: SourceDocument, query_terms: set[str]) -> bool:
 
 def _is_recent(document: SourceDocument) -> bool:
     if not document.published_date:
-        return False
-    return date.today().year - document.published_date.year <= MAX_AGE_YEARS
+        # Патенты и Wikipedia без даты всё равно показываем: дата часто не приходит,
+        # а сами источники проверяемые.
+        return document.source_type in {"patent", "encyclopedia"}
+    max_age = 20 if document.source_type == "patent" else MAX_AGE_YEARS
+    return date.today().year - document.published_date.year <= max_age
 
 
 def _technical_profile(document: SourceDocument, query_terms: set[str]) -> set[str]:
@@ -385,10 +384,11 @@ def _group(documents: list[SourceDocument], query_terms: set[str], query: str) -
 
 def _has_sufficient_evidence(documents: list[SourceDocument]) -> bool:
     """Один блог/препринт не является достаточным основанием для итоговой выдачи."""
-    if any(document.source_type == "patent" for document in documents):
+    types = {document.source_type for document in documents}
+    if "patent" in types or "encyclopedia" in types:
         return True
     # Провайдер (например OpenAlex) — агрегатор, а не первоисточник. Независимость
-    # подтверждают две разные публикации/URL либо патент.
+    # подтверждают две разные публикации/URL либо патент / статья Wikipedia.
     return len({document.url for document in documents}) >= 2
 
 

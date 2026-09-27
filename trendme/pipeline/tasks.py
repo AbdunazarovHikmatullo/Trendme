@@ -3,7 +3,14 @@
 from celery import chord, group, shared_task
 from django.utils import timezone
 
-from parser.tasks import fetch_arxiv, fetch_google_patents, fetch_openalex
+from parser.tasks import (
+    fetch_arxiv,
+    fetch_crossref,
+    fetch_europepmc,
+    fetch_google_patents,
+    fetch_openalex,
+    fetch_wikipedia,
+)
 
 from .models import SearchRun
 from .services import build_candidates
@@ -20,6 +27,9 @@ def start_search(run_id: str) -> None:
             fetch_openalex.s(run_id, run.query),
             fetch_arxiv.s(run_id, run.query),
             fetch_google_patents.s(run_id, run.query),
+            fetch_wikipedia.s(run_id, run.query),
+            fetch_crossref.s(run_id, run.query),
+            fetch_europepmc.s(run_id, run.query),
         )
     )(finalize_search.s(run_id))
 

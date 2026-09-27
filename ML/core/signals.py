@@ -44,6 +44,7 @@ SOURCE_TRUST = {
     "research": 1.00,
     "conference": 0.95,
     "preprint": 0.85,
+    "encyclopedia": 0.75,
     "government": 0.95,
     "regulator": 0.95,
     "report": 0.90,

@@ -1,11 +1,35 @@
 from django.test import SimpleTestCase
 
-from .services import _arxiv_query, _extract_patent_id, _parse_html_date, _parse_html_section
+from .services import (
+    _arxiv_query,
+    _extract_patent_id,
+    _parse_html_date,
+    _parse_html_section,
+    _strip_markup,
+    build_google_patents_url,
+    english_search_query,
+)
 
 
 class SourceQueryTests(SimpleTestCase):
     def test_translates_known_russian_terms_for_arxiv(self) -> None:
-        self.assertEqual(_arxiv_query("квантовые сенсоры"), "all:quantum AND all:sensor")
+        self.assertIn("all:quantum", _arxiv_query("квантовые сенсоры"))
+        self.assertIn("all:sensor", _arxiv_query("квантовые сенсоры"))
+
+    def test_english_search_query_expands_russian_stems(self) -> None:
+        self.assertEqual(english_search_query("квантовые сенсоры"), "quantum sensor")
+        self.assertEqual(english_search_query("робототехника"), "robot robotics")
+
+
+class GooglePatentsUrlTests(SimpleTestCase):
+    def test_uses_xhr_json_endpoint_without_double_q(self) -> None:
+        url = build_google_patents_url("quantum sensor", limit=10)
+        self.assertIn("patents.google.com/xhr/query", url)
+        self.assertNotIn("q=q=", url)
+        self.assertIn("exp=", url)
+
+    def test_strips_google_highlight_tags(self) -> None:
+        self.assertEqual(_strip_markup("NV <b>quantum sensor</b> &hellip;"), "NV quantum sensor ...")
 
 
 class PatentExtractionTests(SimpleTestCase):
