@@ -20,6 +20,13 @@ TITLE_RE = re.compile(r"[^\w\s]", re.UNICODE)
 TOKEN_RE = re.compile(r"[\w-]+", re.UNICODE)
 MAX_CANDIDATES = 15
 MAX_AGE_YEARS = 5
+CORE_SOURCE_TYPES = frozenset({"academic", "preprint"})
+SUPPORT_SOURCE_TYPES = frozenset({"patent", "encyclopedia"})
+NOISE_TITLE_RE = re.compile(
+    r"\b(list of|overview of|index of|timeline of|history of)\b|"
+    r"^список\b|маркетплейс|учетно-контроль|1с:|\bмерч\b",
+    re.IGNORECASE,
+)
 STOP_WORDS = {
     "about", "among", "analysis", "approach", "based", "between", "design", "effects", "from", "into", "methods",
     "model", "models", "novel", "research", "results", "study", "system", "systems", "technology", "using", "with",
@@ -330,13 +337,18 @@ def _is_relevant(document: SourceDocument, query_terms: set[str]) -> bool:
     return title_hits >= 1 and text_hits >= required_hits
 
 
+def _is_noise_title(document: SourceDocument) -> bool:
+    """Отсекает списки, обзоры и коммерческий шум — это не научно-технологический проект."""
+    return bool(NOISE_TITLE_RE.search(document.title))
+
+
 def _is_recent(document: SourceDocument) -> bool:
+    # Wikipedia нужна только как поддержка: дата правки не говорит о зрелости технологии.
+    if document.source_type == "encyclopedia":
+        return True
     if not document.published_date:
-        # Патенты и Wikipedia без даты всё равно показываем: дата часто не приходит,
-        # а сами источники проверяемые.
-        return document.source_type in {"patent", "encyclopedia"}
-    max_age = 20 if document.source_type == "patent" else MAX_AGE_YEARS
-    return date.today().year - document.published_date.year <= max_age
+        return False
+    return date.today().year - document.published_date.year <= MAX_AGE_YEARS
 
 
 def _technical_profile(document: SourceDocument, query_terms: set[str]) -> set[str]:
@@ -372,23 +384,29 @@ def _group(documents: list[SourceDocument], query_terms: set[str], query: str) -
             similar.documents.append(document)
         else:
             groups.append(CandidateGroup(documents=[document]))
-
-    # Если литература релевантна, но её названия слишком разнородны для узкого
-    # поднаправления, формируем один явно названный тематический кандидат. Это
-    # лучше, чем ошибочно считать каждую статью отдельным трендом.
-    confirmed = [group for group in groups if _has_sufficient_evidence(group.documents)]
-    if not confirmed and len(documents) >= 2:
-        return [CandidateGroup(documents=documents, label=query.strip().capitalize())]
     return groups
 
 
-def _has_sufficient_evidence(documents: list[SourceDocument]) -> bool:
-    """Один блог/препринт не является достаточным основанием для итоговой выдачи."""
-    types = {document.source_type for document in documents}
-    if "patent" in types or "encyclopedia" in types:
+def _support_matches(group: CandidateGroup, document: SourceDocument, query_terms: set[str]) -> bool:
+    if _key(group.title) == _key(document.title) or _similar(group, document, query_terms):
         return True
-    # Провайдер (например OpenAlex) — агрегатор, а не первоисточник. Независимость
-    # подтверждают две разные публикации/URL либо патент / статья Wikipedia.
+    support_tokens = _tokens(document.title)
+    group_tokens = _tokens(group.title)
+    return bool(support_tokens & group_tokens) and support_tokens <= (group_tokens | query_terms)
+
+
+def _attach_support(groups: list[CandidateGroup], support: list[SourceDocument], query_terms: set[str]) -> None:
+    """Патент и Wikipedia — факторы/доказательства, не самостоятельные проекты."""
+    for document in support:
+        match = next((group for group in groups if _support_matches(group, document, query_terms)), None)
+        if match and document not in match.documents:
+            match.documents.append(document)
+
+
+def _has_sufficient_evidence(documents: list[SourceDocument]) -> bool:
+    """Кандидат — научно-технологический проект: ядро из науки + независимое подтверждение."""
+    if not any(document.source_type in CORE_SOURCE_TYPES for document in documents):
+        return False
     return len({document.url for document in documents}) >= 2
 
 
@@ -400,7 +418,6 @@ def _observation(documents: list[SourceDocument], title: str | None = None) -> d
         "description": " ".join(doc.abstract for doc in documents if doc.abstract)[:8000],
         "source_type": "academic" if "academic" in source_types else source_types[0],
         "published_date": first_date.isoformat() if first_date else None,
-        "mentions": len(documents),
         "has_patent": "patent" in source_types,
         "source_trust": round(sum(doc.trust for doc in documents) / len(documents), 3),
     }
@@ -427,14 +444,18 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
     query_terms = _query_terms(run.query)
     selected_documents = [
         document for document in run.documents.all().order_by("-published_date")
-        if _is_recent(document) and _is_relevant(document, query_terms)
+        if _is_recent(document) and _is_relevant(document, query_terms) and not _is_noise_title(document)
     ]
-    grouped = [group for group in _group(selected_documents, query_terms, run.query) if _has_sufficient_evidence(group.documents)]
+    core_documents = [document for document in selected_documents if document.source_type in CORE_SOURCE_TYPES]
+    support_documents = [document for document in selected_documents if document.source_type in SUPPORT_SOURCE_TYPES]
+    grouped = _group(core_documents, query_terms, run.query)
+    _attach_support(grouped, support_documents, query_terms)
+    grouped = [group for group in grouped if _has_sufficient_evidence(group.documents)]
 
     run.candidates.all().delete()
     errors: list[str] = []
     created_count = weak_count = high_confidence_count = 0
-    scored: list[tuple[dict, dict, list[SourceDocument]]] = []
+    scored: list[tuple[dict, dict, list[SourceDocument], str]] = []
     for group in grouped:
         documents = group.documents
         observation = _observation(documents, group.title)
@@ -443,22 +464,21 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         except Exception as error:
             errors.append(f"ML: {error}")
             continue
-        if not prediction["weak_signal"]:
+        if not prediction.get("weak_signal"):
             continue
-        # Определяем отрасль из категорий источников
         all_categories: list[str] = []
         for doc in documents:
             all_categories.extend(doc.categories or [])
         predicted_industry = _categories_to_industry(all_categories)
         if predicted_industry is None:
-            # Fallback: определяем по ключевым словам
             predicted_industry = classify_industry(observation["title"], observation["description"])
-        # Фильтруем по отрасли если задан фильтр
         if industry_filter and predicted_industry != industry_filter:
             continue
-        scored.append((prediction, observation, documents))
+        scored.append((prediction, observation, documents, predicted_industry))
 
-    for prediction, observation, documents in sorted(scored, key=lambda item: item[0]["confidence"], reverse=True)[:MAX_CANDIDATES]:
+    for prediction, observation, documents, predicted_industry in sorted(
+        scored, key=lambda item: item[0]["confidence"], reverse=True
+    )[:MAX_CANDIDATES]:
         candidate = TechnologyCandidate.objects.create(
             run=run,
             title=observation["title"],
@@ -466,7 +486,7 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
             potential_benefit="Требует экспертной оценки по подтверждающим источникам.",
             case_example="Исходная научная публикация или препринт из списка источников.",
             confidence=prediction["confidence"],
-            is_weak_signal=prediction["weak_signal"],
+            is_weak_signal=True,
             is_high_confidence=prediction["confidence"] >= 0.75,
             explanation=prediction["explanation"],
             factors=prediction["factors"],

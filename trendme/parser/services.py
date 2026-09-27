@@ -302,6 +302,8 @@ def _wikipedia_lang(lang: str, query: str, limit: int) -> list[dict[str, Any]]:
         url = str(page.get("fullurl") or "").strip()
         if not title or not url or page.get("missing") is not None:
             continue
+        if re.match(r"^(list of|список)\b", title, flags=re.IGNORECASE):
+            continue
         revisions = page.get("revisions") or []
         timestamp = revisions[0].get("timestamp") if revisions else None
         documents.append({

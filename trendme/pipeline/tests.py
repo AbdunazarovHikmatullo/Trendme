@@ -170,3 +170,44 @@ class PipelineTests(TestCase):
         }
         self.assertIn("google_patents", providers)
         self.assertIn("wikipedia", providers)
+
+    @patch("pipeline.services._predict")
+    def test_skips_strong_signal(self, predict_mock) -> None:
+        predict_mock.return_value = {
+            "confidence": 0.21, "weak_signal": False, "explanation": "зрелый сигнал", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+
+    @patch("pipeline.services._predict")
+    def test_wikipedia_or_patent_alone_is_not_a_project(self, predict_mock) -> None:
+        self.run.documents.all().delete()
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="wikipedia",
+            external_id="en:list",
+            title="List of sensors",
+            abstract="A list of sensor types.",
+            url="https://en.wikipedia.org/wiki/List_of_sensors",
+            published_date=date(2026, 1, 15),
+            source_name="Wikipedia",
+            source_type="encyclopedia",
+            language="en",
+            trust=0.75,
+        )
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="google_patents",
+            external_id="US1",
+            title="Quantum sensor device",
+            abstract="A patented quantum sensor.",
+            url="https://patents.google.com/patent/US1",
+            published_date=date(2025, 1, 1),
+            source_name="Google Patents",
+            source_type="patent",
+            language="en",
+            trust=0.95,
+        )
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+        predict_mock.assert_not_called()
