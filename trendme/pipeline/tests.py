@@ -18,7 +18,7 @@ class PipelineTests(TestCase):
             provider="openalex",
             external_id="https://doi.org/10.1000/example",
             title="Laboratory quantum sensor prototype",
-            abstract="Early research prototype with a pilot deployment.",
+            abstract="Early research prototype of a laboratory quantum sensor with a pilot deployment and experimental readout.",
             url="https://doi.org/10.1000/example",
             published_date=date(2026, 1, 1),
             source_name="OpenAlex",
@@ -31,7 +31,7 @@ class PipelineTests(TestCase):
             provider="arxiv",
             external_id="http://arxiv.org/abs/2601.00001",
             title="Laboratory quantum sensor prototype",
-            abstract="Early research prototype with a pilot deployment.",
+            abstract="Early research prototype of a laboratory quantum sensor with a pilot deployment and experimental readout.",
             url="http://arxiv.org/abs/2601.00001",
             published_date=date(2026, 1, 2),
             source_name="arXiv",
@@ -105,7 +105,7 @@ class PipelineTests(TestCase):
                     provider=provider,
                     external_id=f"{provider}-{index}",
                     title=f"Quantum sensor prototype {name}",
-                    abstract="Quantum sensor prototype for early research.",
+                    abstract="Quantum sensor prototype for early laboratory research and experimental validation of the sensing method.",
                     url=f"https://example.org/{provider}/{index}",
                     published_date=date(2026, 2, 1),
                     source_name=provider,
@@ -138,7 +138,7 @@ class PipelineTests(TestCase):
             provider="google_patents",
             external_id="US11988619B2",
             title="Microwave-free quantum sensor based on NV centers",
-            abstract="A quantum sensor prototype for early laboratory research.",
+            abstract="A quantum sensor prototype for early laboratory research based on nitrogen-vacancy centers.",
             url="https://patents.google.com/patent/US11988619B2",
             published_date=date(2025, 3, 1),
             source_name="Google Patents",
@@ -211,3 +211,121 @@ class PipelineTests(TestCase):
         finalize_search.run([], str(self.run.id))
         self.assertEqual(self.run.candidates.count(), 0)
         predict_mock.assert_not_called()
+
+    @patch("pipeline.services._predict")
+    def test_skips_education_conference_and_empty_abstract(self, predict_mock) -> None:
+        self.run.query = "Искусственный интеллект"
+        self.run.save(update_fields=["query"])
+        self.run.documents.all().delete()
+        samples = (
+            (
+                "openalex",
+                "edu-1",
+                "Искусственный интеллект в образовании: вызов современности или будущее педагогики?",
+                "В статье рассматривается роль искусственного интеллекта в современном образовании и персонализации обучения.",
+            ),
+            (
+                "crossref",
+                "edu-2",
+                "Искусственный интеллект в образовании: вызов современности или будущее педагогики?",
+                "В статье рассматривается роль искусственного интеллекта в современном образовании и персонализации обучения.",
+            ),
+            (
+                "openalex",
+                "conf-1",
+                "Вторая конференция «Искусственный интеллект в химии и материаловедении»",
+                "Ученые обсуждали, можно ли научить нейросеть узнавать структуру вещества по фотографии кристаллов.",
+            ),
+            (
+                "crossref",
+                "empty-1",
+                "Как измерить искусственный интеллект?",
+                "",
+            ),
+            (
+                "openalex",
+                "empty-2",
+                "Как измерить искусственный интеллект?",
+                "",
+            ),
+        )
+        for provider, external_id, title, abstract in samples:
+            SourceDocument.objects.create(
+                run=self.run,
+                provider=provider,
+                external_id=external_id,
+                title=title,
+                abstract=abstract,
+                url=f"https://example.org/{external_id}",
+                published_date=date(2025, 3, 1),
+                source_name=provider,
+                source_type="academic",
+                language="ru",
+                trust=0.9,
+            )
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+        predict_mock.assert_not_called()
+
+    @patch("pipeline.services._predict")
+    def test_keeps_specific_emerging_ai_project(self, predict_mock) -> None:
+        self.run.query = "Искусственный интеллект"
+        self.run.save(update_fields=["query"])
+        self.run.documents.all().delete()
+        title = "Photonic neural accelerator for early artificial intelligence inference"
+        abstract = "We report an early laboratory prototype of a photonic neural accelerator for on-device inference."
+        for provider, source_type, external_id in (
+            ("openalex", "academic", "oa-ai-1"),
+            ("arxiv", "preprint", "arxiv-ai-1"),
+        ):
+            SourceDocument.objects.create(
+                run=self.run,
+                provider=provider,
+                external_id=external_id,
+                title=title,
+                abstract=abstract,
+                url=f"https://example.org/{external_id}",
+                published_date=date(2026, 2, 1),
+                source_name=provider,
+                source_type=source_type,
+                language="en",
+                trust=0.9,
+            )
+        predict_mock.return_value = {
+            "confidence": 0.82, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 1)
+        self.assertEqual(self.run.candidates.get().title, title)
+
+    @patch("pipeline.services._predict")
+    def test_does_not_merge_unrelated_ai_papers(self, predict_mock) -> None:
+        self.run.query = "Искусственный интеллект"
+        self.run.save(update_fields=["query"])
+        self.run.documents.all().delete()
+        papers = (
+            "Photonic neural accelerator for early artificial intelligence inference",
+            "Atomic magnetometer prototype using artificial intelligence readout",
+        )
+        abstract = "Early research prototype with neural network methods and laboratory data analysis."
+        for index, title in enumerate(papers):
+            for provider, source_type in (("openalex", "academic"), ("arxiv", "preprint")):
+                SourceDocument.objects.create(
+                    run=self.run,
+                    provider=provider,
+                    external_id=f"{provider}-{index}",
+                    title=title,
+                    abstract=abstract,
+                    url=f"https://example.org/{provider}/{index}",
+                    published_date=date(2026, 2, 1),
+                    source_name=provider,
+                    source_type=source_type,
+                    language="en",
+                    trust=0.9,
+                )
+        predict_mock.return_value = {
+            "confidence": 0.8, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        titles = set(self.run.candidates.values_list("title", flat=True))
+        self.assertEqual(titles, set(papers))

@@ -46,12 +46,13 @@ services:
         condition: service_healthy
     expose:
       - "8000"
+    command: ["gunicorn", "trendme.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "120"]
 
   celery:
     build: ./trendme
     restart: unless-stopped
     entrypoint: ["celery", "-A", "trendme"]
-    command: ["worker", "-l", "info"]
+    command: ["worker", "-l", "info", "--concurrency=1", "--pool=solo"]
     environment:
       DEBUG: ${DEBUG:-0}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-changeme}

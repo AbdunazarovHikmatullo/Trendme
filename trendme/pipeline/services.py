@@ -23,10 +23,14 @@ MAX_AGE_YEARS = 5
 CORE_SOURCE_TYPES = frozenset({"academic", "preprint"})
 SUPPORT_SOURCE_TYPES = frozenset({"patent", "encyclopedia"})
 NOISE_TITLE_RE = re.compile(
-    r"\b(list of|overview of|index of|timeline of|history of)\b|"
-    r"^список\b|маркетплейс|учетно-контроль|1с:|\bмерч\b",
+    r"\b(list of|overview of|index of|timeline of|history of|how to|special issue|"
+    r"conference|workshop|symposium|editorial|in education|pedagogy|curriculum)\b|"
+    r"^список\b|маркетплейс|учетно-контроль|1с:|\bмерч\b|"
+    r"конференц|симпозиум|педагогик|образован|как измерить|телесериал|"
+    r"спецвыпуск|анонс|круглый стол",
     re.IGNORECASE,
 )
+MIN_ABSTRACT_CHARS = 80
 STOP_WORDS = {
     "about", "among", "analysis", "approach", "based", "between", "design", "effects", "from", "into", "methods",
     "model", "models", "novel", "research", "results", "study", "system", "systems", "technology", "using", "with",
@@ -338,8 +342,35 @@ def _is_relevant(document: SourceDocument, query_terms: set[str]) -> bool:
 
 
 def _is_noise_title(document: SourceDocument) -> bool:
-    """Отсекает списки, обзоры и коммерческий шум — это не научно-технологический проект."""
+    """Отсекает списки, обзоры, конференции и гуманитарный шум — это не проект."""
     return bool(NOISE_TITLE_RE.search(document.title))
+
+
+def _specific_tokens(title: str, query_terms: set[str]) -> set[str]:
+    query_roots = {term[:6] for term in query_terms}
+    return {token for token in _tokens(title) if token[:6] not in query_roots}
+
+
+def _specific_title_tokens(document: SourceDocument, query_terms: set[str]) -> set[str]:
+    return _specific_tokens(document.title, query_terms)
+
+
+def _is_generic_topic(document: SourceDocument, query_terms: set[str]) -> bool:
+    """«Искусственный интеллект» — поле, а не зарождающийся проект."""
+    return not _specific_title_tokens(document, query_terms)
+
+
+def _has_project_abstract(document: SourceDocument) -> bool:
+    return len((document.abstract or "").strip()) >= MIN_ABSTRACT_CHARS
+
+
+def _is_core_project(document: SourceDocument, query_terms: set[str]) -> bool:
+    """Ядро выдачи: конкретный научный проект с описанием, не новость и не тема целиком."""
+    return (
+        not _is_noise_title(document)
+        and not _is_generic_topic(document, query_terms)
+        and _has_project_abstract(document)
+    )
 
 
 def _is_recent(document: SourceDocument) -> bool:
@@ -362,17 +393,18 @@ def _technical_profile(document: SourceDocument, query_terms: set[str]) -> set[s
 
 
 def _similar(left: CandidateGroup, right: SourceDocument, query_terms: set[str]) -> bool:
-    """Объединяет статьи вокруг общего технического понятия, а не только одинакового заголовка."""
-    query_roots = {term[:6] for term in query_terms}
-    left_tokens = {token for token in _tokens(left.title) if token[:6] not in query_roots}
-    right_tokens = {token for token in _tokens(right.title) if token[:6] not in query_roots}
-    if left_tokens and right_tokens and len(left_tokens & right_tokens) / len(left_tokens | right_tokens) >= 0.55:
+    """Группирует только статьи об одном проекте: общее слово в названии обязательно."""
+    left_tokens = _specific_tokens(left.title, query_terms)
+    right_tokens = _specific_title_tokens(right, query_terms)
+    if not left_tokens or not right_tokens:
+        return False
+    if len(left_tokens & right_tokens) / len(left_tokens | right_tokens) >= 0.55:
         return True
+    if not (left_tokens & right_tokens):
+        return False
     left_profile = set().union(*(_technical_profile(document, query_terms) for document in left.documents))
     right_profile = _technical_profile(right, query_terms)
-    # Два специфичных общих понятия (например, "atomic" + "magnetometer")
-    # являются более надёжным признаком одной технологии, чем общий запрос.
-    return len(left_profile & right_profile) >= 2
+    return len(left_profile & right_profile) >= 3
 
 
 def _group(documents: list[SourceDocument], query_terms: set[str], query: str) -> list[CandidateGroup]:
@@ -405,7 +437,8 @@ def _attach_support(groups: list[CandidateGroup], support: list[SourceDocument],
 
 def _has_sufficient_evidence(documents: list[SourceDocument]) -> bool:
     """Кандидат — научно-технологический проект: ядро из науки + независимое подтверждение."""
-    if not any(document.source_type in CORE_SOURCE_TYPES for document in documents):
+    core = [document for document in documents if document.source_type in CORE_SOURCE_TYPES]
+    if not any(_has_project_abstract(document) for document in core):
         return False
     return len({document.url for document in documents}) >= 2
 
@@ -444,10 +477,16 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
     query_terms = _query_terms(run.query)
     selected_documents = [
         document for document in run.documents.all().order_by("-published_date")
-        if _is_recent(document) and _is_relevant(document, query_terms) and not _is_noise_title(document)
+        if _is_recent(document) and _is_relevant(document, query_terms)
     ]
-    core_documents = [document for document in selected_documents if document.source_type in CORE_SOURCE_TYPES]
-    support_documents = [document for document in selected_documents if document.source_type in SUPPORT_SOURCE_TYPES]
+    core_documents = [
+        document for document in selected_documents
+        if document.source_type in CORE_SOURCE_TYPES and _is_core_project(document, query_terms)
+    ]
+    support_documents = [
+        document for document in selected_documents
+        if document.source_type in SUPPORT_SOURCE_TYPES and not _is_noise_title(document)
+    ]
     grouped = _group(core_documents, query_terms, run.query)
     _attach_support(grouped, support_documents, query_terms)
     grouped = [group for group in grouped if _has_sufficient_evidence(group.documents)]

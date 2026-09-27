@@ -18,7 +18,8 @@ class SourceQueryTests(SimpleTestCase):
 
     def test_english_search_query_expands_russian_stems(self) -> None:
         self.assertEqual(english_search_query("квантовые сенсоры"), "quantum sensor")
-        self.assertEqual(english_search_query("робототехника"), "robot robotics")
+        self.assertEqual(english_search_query("робототехника"), "robot")
+        self.assertEqual(english_search_query("Искусственный интеллект"), "artificial intelligence")
 
 
 class GooglePatentsUrlTests(SimpleTestCase):

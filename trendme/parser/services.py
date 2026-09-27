@@ -29,6 +29,9 @@ SOURCE_QUERY_ALIASES = {
     "медицин": ("medical", "biomedical"),
     "инфраструктур": ("infrastructure",),
     "безопаснос": ("security", "cybersecurity"),
+    "искусственн": ("artificial",),
+    "интеллект": ("intelligence", "neural"),
+    "нейросет": ("neural",),
 }
 
 
@@ -104,7 +107,7 @@ def _arxiv_query(query: str) -> str:
 
 
 def openalex(query: str, limit: int = 30) -> list[dict[str, Any]]:
-    params = urlencode({"search": query, "per-page": limit})
+    params = urlencode({"search": english_search_query(query), "per-page": limit})
     payload = json.loads(_request(f"https://api.openalex.org/works?{params}", "application/json").decode("utf-8"))
     documents = []
     for item in payload.get("results", []):
