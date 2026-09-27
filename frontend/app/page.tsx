@@ -68,7 +68,7 @@ export default function Home() {
   async function fetchWithCategory() { if (!run) return; try { const params = selectedIndustry === "all" ? "" : `?category=${selectedIndustry}`; const response = await fetch(`${API_BASE}/api/searches/${run.id}/${params}`); if (!response.ok) throw new Error("Не удалось загрузить результаты."); setRun(await response.json()); } catch (reason) { setError(reason instanceof Error ? reason.message : "Ошибка загрузки."); } }
   return <main>
     <nav className="nav"><a className="brand" href="#top"><i>◒</i>Trend<span>Me</span></a><div className="nav-note"><span className="status-dot" />Аналитика ранних технологических сигналов</div></nav>
-    <section className="hero" id="top"><div className="hero-orb orb-one" /><div className="hero-orb orb-two" /><p className="kicker">СИСТЕМА ТЕХНОЛОГИЧЕСКОЙ РАЗВЕДКИ</p><h1>Находите тренды<br /><em>до того, как они станут очевидными.</em></h1><p className="hero-copy">TrendMe анализирует научные публикации, препринты и патенты, чтобы найти подтверждённые ранние сигналы в нужной области.</p>
+    <section className="hero" id="top"><div className="hero-orb orb-one" /><div className="hero-orb orb-two" /><p className="kicker">СИСТЕМА ТЕХНОЛОГИЧЕСКОЙ РАЗВЕДКИ</p><h1>Находите тренды<br /><em>до того, как они станут очевидными.</em></h1><p className="hero-copy">TrendMe анализирует научные публикации, препринты, патенты и Wikipedia, чтобы найти подтверждённые ранние сигналы в нужной области.</p>
       <form className="search-box" onSubmit={submit}>
         <span className="search-symbol">⌕</span>
         <select className="industry-select" value={searchIndustry} onChange={(e) => setSearchIndustry(e.target.value)} aria-label="Отрасль">
@@ -80,7 +80,7 @@ export default function Home() {
     </section>
     {run && <section className="workspace"><div className="run-header"><div><p className="kicker">ПОИСКОВЫЙ ЗАПРОС</p><h2>«{run.query}»</h2></div><span className={`run-status ${run.status}`}><i />{labels[run.status]}</span></div>
       {!terminalStates.has(run.status) && <div className="progress-wrap"><div className="progress-copy"><span>{labels[run.status]}</span><span>{progress}%</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div><p>Собираем и проверяем открытые источники. Это обычно занимает до минуты.</p></div>}
-      {terminalStates.has(run.status) && <><div className="metrics"><div><span>Обработано источников</span><b>{run.processed_sources}</b><small>научные публикации, препринты и патенты</small></div><div><span>Кандидаты в слабые сигналы</span><b>{run.weak_signals_count}</b><small>прошли тематическую и доказательную проверку</small></div><div><span>Уверенность выше 75%</span><b>{run.high_confidence_count}</b><small>сигналы высокой уверенности</small></div></div>
+      {terminalStates.has(run.status) && <><div className="metrics"><div><span>Обработано источников</span><b>{run.processed_sources}</b><small>публикации, препринты, патенты, Wikipedia</small></div><div><span>Кандидаты в слабые сигналы</span><b>{run.weak_signals_count}</b><small>прошли тематическую и доказательную проверку</small></div><div><span>Уверенность выше 75%</span><b>{run.high_confidence_count}</b><small>сигналы высокой уверенности</small></div></div>
       {run.errors.length > 0 && <div className="notice">Часть источников недоступна: {run.errors.join("; ")}</div>}
       <div className="filter-bar">
         <label htmlFor="industry-filter">Отрасль:</label>

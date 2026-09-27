@@ -130,3 +130,43 @@ class PipelineTests(TestCase):
     def test_search_query_is_validated(self) -> None:
         response = APIClient().post("/api/searches/", {"query": " "}, format="json")
         self.assertEqual(response.status_code, 400)
+
+    @patch("pipeline.services._predict")
+    def test_keeps_patent_and_wikipedia_sources(self, predict_mock) -> None:
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="google_patents",
+            external_id="US11988619B2",
+            title="Microwave-free quantum sensor based on NV centers",
+            abstract="A quantum sensor prototype for early laboratory research.",
+            url="https://patents.google.com/patent/US11988619B2",
+            published_date=date(2025, 3, 1),
+            source_name="Google Patents",
+            source_type="patent",
+            language="en",
+            trust=0.95,
+        )
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="wikipedia",
+            external_id="en:123",
+            title="Quantum sensor",
+            abstract="A quantum sensor is a device that exploits quantum correlations.",
+            url="https://en.wikipedia.org/wiki/Quantum_sensor",
+            published_date=date(2026, 1, 15),
+            source_name="Wikipedia",
+            source_type="encyclopedia",
+            language="en",
+            trust=0.75,
+        )
+        predict_mock.return_value = {
+            "confidence": 0.88, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        providers = {
+            source.provider
+            for candidate in self.run.candidates.all()
+            for source in candidate.source_documents.all()
+        }
+        self.assertIn("google_patents", providers)
+        self.assertIn("wikipedia", providers)
