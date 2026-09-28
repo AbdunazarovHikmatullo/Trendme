@@ -1,96 +1,297 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { FormEvent, Fragment, useEffect, useMemo, useState } from "react";
 
-type Source = { source_name: string; url: string; published_date: string | null; source_type: string; language: string; trust: number; trust_level: string };
-type Factor = { name: string; value: number; direction: number; description: string; contribution: number };
-type Candidate = { id: number; title: string; description: string; potential_benefit: string; case_example: string; confidence: number; is_weak_signal: boolean; is_high_confidence: boolean; explanation: string; factors: Factor[]; industry: string; industry_label: string; sources: Source[] };
-type Status = "queued" | "fetching" | "analyzing" | "completed" | "partial" | "failed";
-type SearchRun = { id: string; query: string; status: Status; processed_sources: number; candidates_count: number; weak_signals_count: number; high_confidence_count: number; errors: string[]; candidates: Candidate[] };
+import { Ic } from "./icons";
+import {
+  API_BASE,
+  LEVEL_LABEL,
+  SearchRun,
+  TERMINAL,
+  fetchSearch,
+  predictorChips,
+  scoreLevel,
+  scorePercent,
+} from "./lib";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
-const examples = ["Квантовые сенсоры", "Перспективные решения в финтехе", "Слабые сигналы в кибербезопасности"];
-const terminalStates = new Set<Status>(["completed", "partial", "failed"]);
-const labels: Record<Status, string> = { queued: "В очереди", fetching: "Собираем источники", analyzing: "Анализируем кандидатов", completed: "Анализ завершён", partial: "Завершён частично", failed: "Не удалось завершить" };
-const score = (value: number) => `${Math.round(value * 100)}%`;
+const VISIBLE_WHEN_COLLAPSED = 15;
 
-const INDUSTRIES = [
-  { value: "all", label: "Все" },
-  { value: "industrial_ai", label: "Индустриальный ИИ" },
-  { value: "robotics", label: "Робототехника" },
-  { value: "infrastructure", label: "Инфраструктура ИИ" },
-  { value: "fintech", label: "Финтех" },
-  { value: "ai_security", label: "Защита ИИ" },
-  { value: "edge", label: "Edge Computing" },
-  { value: "semiconductor", label: "Полупроводники" },
-  { value: "energy", label: "Энергетика" },
-  { value: "health", label: "Здравоохранение" },
-  { value: "other", label: "Другое" },
-];
+function SearchForm({
+  query,
+  setQuery,
+  onSubmit,
+  disabled,
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  onSubmit: (event: FormEvent) => void;
+  disabled: boolean;
+}) {
+  return (
+    <form className="search" onSubmit={onSubmit} role="search">
+      <div className="search__field">
+        <Ic id="i-search" size={18} />
+        <input
+          className="search__input"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Введите технологию, область науки или ключевое слово"
+          aria-label="Запрос"
+        />
+        {query && (
+          <button className="search__clear" type="button" aria-label="Очистить" onClick={() => setQuery("")}>
+            ×
+          </button>
+        )}
+      </div>
+      <button className="search__submit" type="submit" disabled={disabled}>
+        <Ic id="i-search-white" size={16} />
+        Найти сигналы
+      </button>
+    </form>
+  );
+}
 
-const INDUSTRY_COLORS: Record<string, string> = {
-  industrial_ai: "#6366f1",
-  robotics: "#f59e0b",
-  infrastructure: "#0ea5e9",
-  fintech: "#10b981",
-  ai_security: "#ef4444",
-  edge: "#8b5cf6",
-  semiconductor: "#ec4899",
-  energy: "#84cc16",
-  health: "#14b8a6",
-  other: "#6b7280",
-};
-
-function CandidateCard({ item, rank }: { item: Candidate; rank: number }) {
-  const [expanded, setExpanded] = useState(false);
-  const factors = item.factors.filter((factor) => Math.abs(factor.contribution) > 0.01).slice(0, 4);
-  const color = INDUSTRY_COLORS[item.industry] || "#6b7280";
-  return <article className="candidate-card">
-    <div className="candidate-topline"><span className="rank">{String(rank).padStart(2, "0")}</span><span className="signal-tag">Слабый сигнал</span><span className="confidence">{score(item.confidence)}</span></div>
-    <div className="industry-badge" style={{ borderColor: color, color }}>{item.industry_label}</div>
-    <h3>{item.title}</h3>
-    <p className="candidate-description">{item.description || "Описание пока отсутствует в открытом источнике."}</p>
-    <div className="why-box"><span>Почему в выдаче</span><p>{item.explanation}</p></div>
-    <div className="factor-list">{factors.map((factor) => <span key={factor.name} className={`factor ${factor.contribution >= 0 ? "positive" : "negative"}`}>{factor.description}</span>)}</div>
-    <button className="detail-button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>{expanded ? "Скрыть аналитический отчёт" : "Открыть аналитический отчёт"}<span>{expanded ? "−" : "+"}</span></button>
-    {expanded && <div className="detail-panel">
-      <div className="detail-grid"><div><span className="eyebrow">Потенциальное преимущество</span><p>{item.potential_benefit}</p></div><div><span className="eyebrow">Кейс-пример</span><p>{item.case_example}</p></div></div>
-      <div className="sources-section"><span className="eyebrow">Подтверждающие источники</span>{item.sources.map((source) => <a className="source-row" key={source.url} href={source.url} target="_blank" rel="noreferrer"><span className="source-icon">↗</span><span className="source-main"><b>{source.source_name}</b><small>{source.source_type} · {source.published_date ?? "Дата не указана"} · {source.language || "Язык не указан"}</small></span><span className={`trust ${source.trust_level}`}>{source.trust_level} доверенность</span></a>)}</div>
-    </div>}
-  </article>;
+function LoadingTimer({ active }: { active: boolean }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active) {
+      setElapsed(0);
+      return;
+    }
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 250);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return <p className="loading__timer">{`${pad(Math.floor(elapsed / 60))}:${pad(elapsed % 60)}`}</p>;
 }
 
 export default function Home() {
-  const [query, setQuery] = useState(""); const [run, setRun] = useState<SearchRun | null>(null); const [isSubmitting, setIsSubmitting] = useState(false); const [error, setError] = useState(""); const [selectedIndustry, setSelectedIndustry] = useState("all"); const [searchIndustry, setSearchIndustry] = useState("all");
-  useEffect(() => { if (!run || terminalStates.has(run.status)) return; const timer = window.setInterval(async () => { try { const response = await fetch(`${API_BASE}/api/searches/${run.id}/`); if (!response.ok) throw new Error("Не удалось обновить статус поиска."); setRun(await response.json()); } catch (reason) { setError(reason instanceof Error ? reason.message : "Ошибка соединения с сервисом."); } }, 1800); return () => window.clearInterval(timer); }, [run]);
-  const progress = useMemo(() => run?.status === "queued" ? 12 : run?.status === "fetching" ? 46 : run?.status === "analyzing" ? 78 : run && terminalStates.has(run.status) ? 100 : 0, [run]);
-  async function submit(event: FormEvent) { event.preventDefault(); if (query.trim().length < 2) { setError("Введите технологическое направление — минимум 2 символа."); return; } setError(""); setIsSubmitting(true); setRun(null); try { const body: Record<string, string> = { query: query.trim() }; if (searchIndustry !== "all") body.industry = searchIndustry; const response = await fetch(`${API_BASE}/api/searches/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error("Не удалось запустить поиск. Проверьте доступность сервиса."); setRun(await response.json()); } catch (reason) { setError(reason instanceof Error ? reason.message : "Ошибка соединения с сервисом."); } finally { setIsSubmitting(false); } }
-  async function fetchWithCategory() { if (!run) return; try { const params = selectedIndustry === "all" ? "" : `?category=${selectedIndustry}`; const response = await fetch(`${API_BASE}/api/searches/${run.id}/${params}`); if (!response.ok) throw new Error("Не удалось загрузить результаты."); setRun(await response.json()); } catch (reason) { setError(reason instanceof Error ? reason.message : "Ошибка загрузки."); } }
-  return <main>
-    <nav className="nav"><a className="brand" href="#top"><i>◒</i>Trend<span>Me</span></a><div className="nav-note"><span className="status-dot" />Слабые сигналы зарождающихся технологий</div></nav>
-    <section className="hero" id="top"><div className="hero-orb orb-one" /><div className="hero-orb orb-two" /><p className="kicker">НАУЧНО-ТЕХНОЛОГИЧЕСКАЯ РАЗВЕДКА</p><h1>Находите проекты<br /><em>на стадии зарождения.</em></h1><p className="hero-copy">TrendMe собирает научные источники и отдаёт кандидатов модели. В выдаче остаются только слабые сигналы — сильные и зрелые пропускаем.</p>
-      <form className="search-box" onSubmit={submit}>
-        <span className="search-symbol">⌕</span>
-        <select className="industry-select" value={searchIndustry} onChange={(e) => setSearchIndustry(e.target.value)} aria-label="Отрасль">
-          {INDUSTRIES.map((ind) => <option key={ind.value} value={ind.value}>{ind.label}</option>)}
-        </select>
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Например, квантовые сенсоры" aria-label="Технологическое направление" /><button disabled={isSubmitting}>{isSubmitting ? "Запускаем…" : "Найти сигналы"}<span>→</span></button>
-      </form>
-      <div className="examples"><span>Попробуйте:</span>{examples.map((example) => <button key={example} onClick={() => setQuery(example)}>{example}</button>)}</div>{error && <p className="error-message">{error}</p>}
-    </section>
-    {run && <section className="workspace"><div className="run-header"><div><p className="kicker">ПОИСКОВЫЙ ЗАПРОС</p><h2>«{run.query}»</h2></div><span className={`run-status ${run.status}`}><i />{labels[run.status]}</span></div>
-      {!terminalStates.has(run.status) && <div className="progress-wrap"><div className="progress-copy"><span>{labels[run.status]}</span><span>{progress}%</span></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div><p>Собираем и проверяем открытые источники. Это обычно занимает до минуты.</p></div>}
-      {terminalStates.has(run.status) && <><div className="metrics"><div><span>Обработано источников</span><b>{run.processed_sources}</b><small>наука и препринты; патент и Wikipedia — только факторы</small></div><div><span>Кандидаты в слабые сигналы</span><b>{run.weak_signals_count}</b><small>прошли тематическую и доказательную проверку</small></div><div><span>Уверенность выше 75%</span><b>{run.high_confidence_count}</b><small>сигналы высокой уверенности</small></div></div>
-      {run.errors.length > 0 && <div className="notice">Часть источников недоступна: {run.errors.join("; ")}</div>}
-      <div className="filter-bar">
-        <label htmlFor="industry-filter">Отрасль:</label>
-        <select id="industry-filter" value={selectedIndustry} onChange={(e) => { setSelectedIndustry(e.target.value); fetchWithCategory(); }}>
-          {INDUSTRIES.map((ind) => <option key={ind.value} value={ind.value}>{ind.label}</option>)}
-        </select>
-        <span className="filter-count">{run.candidates.length} результатов</span>
-      </div>
-      <div className="results-head"><div><p className="kicker">РЕЗУЛЬТАТЫ АНАЛИЗА</p><h2>{run.candidates.length ? `ТОП-${run.candidates.length} зарождающихся технологий` : "Подтверждённые сигналы не найдены"}</h2></div><p>{run.candidates.length ? "Карточки отсортированы по уверенности модели." : "Попробуйте уточнить запрос или выбрать более узкое технологическое направление."}</p></div><div className="results">{run.candidates.map((item, index) => <CandidateCard item={item} rank={index + 1} key={item.id} />)}</div></>}
-    </section>}
-    <footer><span>TrendMe · 2026</span><span>Проверяемые источники · Объяснимая модель · Human-in-the-loop</span></footer>
-  </main>;
+  const [query, setQuery] = useState("");
+  const [run, setRun] = useState<SearchRun | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [openIds, setOpenIds] = useState<Set<number>>(new Set());
+  const [listExpanded, setListExpanded] = useState(true);
+
+  const inProgress = Boolean(run && !TERMINAL.has(run.status));
+  const done = Boolean(run && TERMINAL.has(run.status));
+
+  useEffect(() => {
+    const lastId = sessionStorage.getItem("trendme:lastRun");
+    if (!lastId) return;
+    fetchSearch(lastId).then((saved) => {
+      setRun(saved);
+      setQuery(saved.query);
+    }).catch(() => sessionStorage.removeItem("trendme:lastRun"));
+  }, []);
+
+  useEffect(() => {
+    if (run?.id) sessionStorage.setItem("trendme:lastRun", run.id);
+  }, [run?.id]);
+
+  useEffect(() => {
+    if (!run || TERMINAL.has(run.status)) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/searches/${run.id}/`);
+        if (!response.ok) throw new Error("Не удалось обновить статус поиска.");
+        setRun(await response.json());
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Ошибка соединения с сервисом.");
+      }
+    }, 1800);
+    return () => window.clearInterval(timer);
+  }, [run]);
+
+  useEffect(() => {
+    if (!run || !TERMINAL.has(run.status)) return;
+    setOpenIds(new Set(run.candidates.slice(0, 3).map((item) => item.id)));
+    setListExpanded(true);
+  }, [run?.id, run?.status]);
+
+  const visible = useMemo(() => {
+    if (!run) return [];
+    return listExpanded ? run.candidates : run.candidates.slice(0, VISIBLE_WHEN_COLLAPSED);
+  }, [run, listExpanded]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (query.trim().length < 2) {
+      setError("Введите технологическое направление — минимум 2 символа.");
+      return;
+    }
+    setError("");
+    setIsSubmitting(true);
+    setRun(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/searches/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query.trim() }),
+      });
+      if (!response.ok) throw new Error("Не удалось запустить поиск. Проверьте доступность сервиса.");
+      setRun(await response.json());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Ошибка соединения с сервисом.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function reset() {
+    setQuery("");
+    setRun(null);
+    setError("");
+    setOpenIds(new Set());
+    sessionStorage.removeItem("trendme:lastRun");
+  }
+
+  function toggle(id: number) {
+    setOpenIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <main className="page">
+      <section>
+        <h1 className="hero__title">TrendME</h1>
+        <p className="hero__subtitle">Поиск зарождающихся научно-технологических трендов на основе ИИ</p>
+        <SearchForm query={query} setQuery={setQuery} onSubmit={submit} disabled={isSubmitting || inProgress} />
+        {run && (
+          <div className="query">
+            <span className="query__label">Запрос:</span>
+            <span className="query__chip">«{run.query}»</span>
+            <button className="query__reset" type="button" onClick={reset}>Сбросить</button>
+          </div>
+        )}
+        {error && <p className="error-message">{error}</p>}
+      </section>
+
+      {inProgress && (
+        <section className="loading" role="status" aria-live="polite">
+          <svg className="ic spinner" width="46" height="46" aria-hidden="true"><use href="#i-spinner" /></svg>
+          <p>{run?.status === "analyzing" ? "Анализируем кандидатов…" : "Анализируем источники…"}</p>
+          <LoadingTimer active={inProgress} />
+        </section>
+      )}
+
+      {done && run && run.candidates.length === 0 && (
+        <section className="empty-state" role="status">
+          <Ic id="i-empty" size={42} />
+          <p className="empty-state__title">По этому направлению пока не нашли зарождающихся трендов</p>
+          <p className="empty-state__text">Попробуйте изменить формулировку запроса или выбрать другое направление</p>
+        </section>
+      )}
+
+      {done && run && run.candidates.length > 0 && (
+        <>
+          <section className="stats" aria-label="Сводка">
+            <div className="stat">
+              <div className="stat__label"><Ic id="i-database" size={14} />Обработано источников</div>
+              <div className="stat__value">{run.processed_sources}</div>
+              <div className="stat__note">наука и препринты; патент — фактор</div>
+            </div>
+            <div className="stat">
+              <div className="stat__label"><Ic id="i-zap" size={14} />Технологий-кандидатов на слабый сигнал</div>
+              <div className="stat__value stat__value--amber">{run.weak_signals_count}</div>
+              <a className="stat__note stat__note--link" href="#list">Перейти к полному списку <Ic id="i-arrow-right" size={12} /></a>
+            </div>
+            <div className="stat">
+              <div className="stat__label"><Ic id="i-check-circle" size={14} />Подтверждённых сигналов (уверенность &gt; 75%)</div>
+              <div className="stat__value stat__value--green">{run.high_confidence_count}</div>
+              <div className="stat__note">Высокая уверенность модели</div>
+            </div>
+          </section>
+
+          {run.errors.length > 0 && <div className="notice">Часть источников недоступна: {run.errors.join("; ")}</div>}
+
+          <section className="card" id="list">
+            <div className="card__header">
+              <div>
+                <h2 className="card__title">Топ найденных «слабых сигналов»<span className="muted"> по теме </span><span className="accent">«{run.query}»</span></h2>
+                <p className="card__note">В выдаче только слабые сигналы зарождающихся научно-технологических проектов</p>
+              </div>
+              <span className="card__count">{run.high_confidence_count} из {run.candidates.length}</span>
+            </div>
+            <div className="table-scroll">
+              <table>
+                <colgroup>
+                  <col className="c-num" /><col className="c-name" /><col className="c-score" /><col className="c-pred" /><col className="c-act" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th className="num">№</th>
+                    <th>Технология / Тема</th>
+                    <th>Скоринг (уверенность ИИ)</th>
+                    <th>Ключевые предикторы</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((item, index) => {
+                    const open = openIds.has(item.id);
+                    const level = scoreLevel(item.confidence);
+                    const chips = predictorChips(item);
+                    return (
+                      <Fragment key={item.id}>
+                        <tr className={`signal${open ? " is-open" : ""}`}>
+                          <td className="num">{index + 1}</td>
+                          <td>
+                            <p className="name">{item.title}</p>
+                            {level === "low" && <span className="lowconf"><Ic id="i-warn" size={10} />Низкий уровень уверенности ИИ</span>}
+                          </td>
+                          <td><span className={`badge badge--${level}`}>{LEVEL_LABEL[level]} · {scorePercent(item.confidence)}%</span></td>
+                          <td><div className="chips">{chips.map((chip) => <span className="chip" key={chip}>{chip}</span>)}</div></td>
+                          <td className="act">
+                            <div className="actions">
+                              <button className="btn" type="button" onClick={() => toggle(item.id)} aria-expanded={open}>
+                                <Ic id={open ? "i-chevron-up-13" : "i-chevron-down-13"} size={13} />
+                                <span>{open ? "Скрыть" : "Обоснование"}</span>
+                              </button>
+                              <Link className="btn btn--primary" href={`/insight/${run.id}/${item.id}`}>
+                                Инсайт <Ic id="i-external" size={12} />
+                              </Link>
+                            </div>
+                          </td>
+                        </tr>
+                        {open && (
+                          <tr className="rationale">
+                            <td></td>
+                            <td colSpan={4}>
+                              <div className="rationale__box">
+                                <div className="rationale__icon"><Ic id="i-zap-amber" size={15} /></div>
+                                <div>
+                                  <p className="rationale__title">Обоснование классификации</p>
+                                  <p className="rationale__text">{item.explanation || "Модель отнесла кандидата к слабому сигналу по совокупности научных источников."}</p>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {run.candidates.length > VISIBLE_WHEN_COLLAPSED && (
+              <div className="card__footer">
+                <button className="collapse" type="button" aria-expanded={listExpanded} onClick={() => setListExpanded((value) => !value)}>
+                  <Ic id="i-chevron-up-15" size={15} />
+                  <span>{listExpanded ? "Свернуть список" : "Показать весь список"}</span>
+                </button>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </main>
+  );
 }

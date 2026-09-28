@@ -7,13 +7,26 @@ from .models import SearchRun, TechnologyCandidate
 
 class SourceDocumentSerializer(serializers.ModelSerializer):
     trust_level = serializers.SerializerMethodField()
+    role = serializers.SerializerMethodField()
 
     class Meta:
         model = SourceDocument
-        fields = ("source_name", "url", "published_date", "source_type", "language", "trust", "trust_level")
+        fields = (
+            "title", "provider", "external_id", "source_name", "url",
+            "published_date", "source_type", "role", "language", "trust", "trust_level",
+        )
 
     def get_trust_level(self, item: SourceDocument) -> str:
         return "высокий" if item.trust >= 0.85 else "средний" if item.trust >= 0.6 else "пониженный"
+
+    def get_role(self, item: SourceDocument) -> str:
+        if item.source_type in {"academic", "preprint"}:
+            return "core"
+        if item.source_type == "patent":
+            return "patent"
+        if item.source_type == "encyclopedia":
+            return "encyclopedia"
+        return item.source_type
 
 
 class CandidateSerializer(serializers.ModelSerializer):

@@ -350,7 +350,7 @@ def crossref(query: str, limit: int = 20) -> list[dict[str, Any]]:
             or ((item.get("published-print") or {}).get("date-parts") or [[]])[0]
         )
         published_date = None
-        if published:
+        if published and published[0]:
             year = int(published[0])
             month = int(published[1]) if len(published) > 1 else 1
             day = int(published[2]) if len(published) > 2 else 1

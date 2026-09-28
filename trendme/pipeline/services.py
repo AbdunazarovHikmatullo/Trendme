@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+from difflib import SequenceMatcher
 from urllib.request import Request, urlopen
 
 from parser.models import SourceDocument
-from parser.services import SOURCE_QUERY_ALIASES
+from parser.services import SOURCE_QUERY_ALIASES, english_search_query
 
 from .models import SearchRun, TechnologyCandidate
 
@@ -24,13 +26,47 @@ CORE_SOURCE_TYPES = frozenset({"academic", "preprint"})
 SUPPORT_SOURCE_TYPES = frozenset({"patent", "encyclopedia"})
 NOISE_TITLE_RE = re.compile(
     r"\b(list of|overview of|index of|timeline of|history of|how to|special issue|"
-    r"conference|workshop|symposium|editorial|in education|pedagogy|curriculum)\b|"
+    r"conference|workshop|symposium|editorial|in education|pedagogy|curriculum|"
+    r"systematic review|a review|review and|philosophical|ontological|"
+    r"fermi paradox|social interaction|comparison of humans|metaverse|"
+    r"education|postgraduate|survey|helpfulness|limits of|limit of|bounds on|"
+    r"a theory of|theory of|comment on|towards understanding)\b|"
     r"^список\b|маркетплейс|учетно-контроль|1с:|\bмерч\b|"
     r"конференц|симпозиум|педагогик|образован|как измерить|телесериал|"
-    r"спецвыпуск|анонс|круглый стол",
+    r"спецвыпуск|анонс|круглый стол|философ",
     re.IGNORECASE,
 )
 MIN_ABSTRACT_CHARS = 80
+TITLE_SIMILARITY = 0.90
+SUPPORT_JACCARD = 0.35
+MAX_WIKI_PER_GROUP = 1
+MAX_PATENTS_PER_GROUP = 2
+DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
+ARXIV_ID_RE = re.compile(
+    r"(?:arxiv\.org/(?:abs|pdf|html)/|arxiv:)(\d{4}\.\d{4,5})(?:v\d+)?",
+    re.IGNORECASE,
+)
+ARTIFACT_RE = re.compile(
+    r"\b(prototype|prototyp|device|platform|detector|fabricat|demonstrat|"
+    r"we report|we present|we demonstrate|we propose|we develop|"
+    r"architecture|instrument|magnetometer|accelerometer|implementation|"
+    r"experimental|experiment|readout|transducer|qubit|nv-center|"
+    r"nitrogen-vacancy|apparatus|setup|"
+    r"прототип|устройств|детектор|экспериментальн|демонстрац|"
+    r"мы представляем|мы сообщаем)\b",
+    re.IGNORECASE,
+)
+APPLICATION_RE = re.compile(
+    r"\b(for|enabling|toward|towards|application|used to|use in|enables|"
+    r"allowing|применен|позволя)\b",
+    re.IGNORECASE,
+)
+OFFTOPIC_MARKERS = (
+    ("blockchain", ("blockchain", "блокчейн")),
+    ("routing", ("routing", "маршрутиз")),
+    ("post-quantum", ("post-quantum", "postquantum", "постквант")),
+    ("post quantum", ("post-quantum", "postquantum", "постквант")),
+)
 STOP_WORDS = {
     "about", "among", "analysis", "approach", "based", "between", "design", "effects", "from", "into", "methods",
     "model", "models", "novel", "research", "results", "study", "system", "systems", "technology", "using", "with",
@@ -319,26 +355,74 @@ def _tokens(text: str) -> set[str]:
     return {token for token in TOKEN_RE.findall(text.casefold()) if len(token) >= 4 and token not in STOP_WORDS}
 
 
+def _title_token_list(title: str) -> list[str]:
+    return [token for token in TOKEN_RE.findall(title.casefold()) if len(token) >= 3]
+
+
 def _query_terms(query: str) -> set[str]:
     terms = _tokens(query)
     for stem, aliases in QUERY_ALIASES.items():
-        if any(token.startswith(stem) for token in terms):
+        if stem in query.casefold() or any(token.startswith(stem) for token in terms):
             terms.update(aliases)
     return terms
 
 
-def _is_relevant(document: SourceDocument, query_terms: set[str]) -> bool:
-    """Отсекает публикации, попавшие в полнотекстовый поиск случайно.
+def _query_concept_groups(query: str) -> list[set[str]]:
+    raw = _tokens(query)
+    groups: list[set[str]] = []
+    for stem, aliases in QUERY_ALIASES.items():
+        if stem in query.casefold() or any(token.startswith(stem) for token in raw):
+            groups.append({stem, *aliases})
+    if groups:
+        return groups
+    english_parts = [part for part in english_search_query(query).casefold().split() if len(part) >= 3]
+    return [{part} for part in english_parts] or [raw]
 
-    Совпадение в названии сильнее совпадения в абстракте: так документ об UFO,
-    случайно упоминающий квантовые сенсоры, не становится технологией-кандидатом.
-    """
+
+def _hits_group(title_tokens: set[str], group: set[str]) -> bool:
+    return any(
+        any(token.startswith(term) or term.startswith(token) for token in title_tokens)
+        for term in group
+        if len(term) >= 4
+    )
+
+
+def _has_query_phrase(title: str, query: str) -> bool:
+    parts = [part for part in english_search_query(query).casefold().split() if len(part) >= 3]
+    if len(parts) < 2:
+        return False
+    pairs = [parts[:2]]
+    if parts[1].startswith("sensor"):
+        pairs.append([parts[0], "sensing"])
+    tokens = _title_token_list(title)
+    for first, second in pairs:
+        for index, token in enumerate(tokens):
+            if not (token.startswith(first) or first.startswith(token)):
+                continue
+            for neighbor in tokens[index + 1:index + 3]:
+                if neighbor.startswith(second) or second.startswith(neighbor):
+                    return True
+    return False
+
+
+def _is_offtopic_title(title: str, query: str) -> bool:
+    haystack = f"{query} {english_search_query(query)}".casefold()
+    folded = title.casefold()
+    for marker, query_synonyms in OFFTOPIC_MARKERS:
+        if marker in folded and not any(synonym in haystack for synonym in query_synonyms):
+            return True
+    return False
+
+
+def _is_relevant(document: SourceDocument, query: str, _query_terms: set[str]) -> bool:
+    """Допуск только если ядерные понятия запроса стоят в названии, не в случайном абстракте."""
+    if _is_offtopic_title(document.title, query):
+        return False
     title_tokens = _tokens(document.title)
-    text_tokens = title_tokens | _tokens(document.abstract[:2000])
-    title_hits = sum(any(token.startswith(term) or term.startswith(token) for token in title_tokens) for term in query_terms)
-    text_hits = sum(any(token.startswith(term) or term.startswith(token) for token in text_tokens) for term in query_terms)
-    required_hits = 1 if len(query_terms) == 1 else 2
-    return title_hits >= 1 and text_hits >= required_hits
+    if _has_query_phrase(document.title, query):
+        return True
+    groups = _query_concept_groups(query)
+    return bool(groups) and all(_hits_group(title_tokens, group) for group in groups)
 
 
 def _is_noise_title(document: SourceDocument) -> bool:
@@ -364,12 +448,17 @@ def _has_project_abstract(document: SourceDocument) -> bool:
     return len((document.abstract or "").strip()) >= MIN_ABSTRACT_CHARS
 
 
+def _has_artifact(document: SourceDocument) -> bool:
+    return bool(ARTIFACT_RE.search(f"{document.title} {document.abstract[:2000]}"))
+
+
 def _is_core_project(document: SourceDocument, query_terms: set[str]) -> bool:
     """Ядро выдачи: конкретный научный проект с описанием, не новость и не тема целиком."""
     return (
         not _is_noise_title(document)
         and not _is_generic_topic(document, query_terms)
         and _has_project_abstract(document)
+        and _has_artifact(document)
     )
 
 
@@ -382,78 +471,159 @@ def _is_recent(document: SourceDocument) -> bool:
     return date.today().year - document.published_date.year <= MAX_AGE_YEARS
 
 
-def _technical_profile(document: SourceDocument, query_terms: set[str]) -> set[str]:
-    """Технические понятия для лёгкой тематической кластеризации без внешней модели."""
-    text = f"{document.title} {document.abstract[:1800]}"
-    query_roots = {term[:6] for term in query_terms}
-    return {
-        token for token in _tokens(text)
-        if token[:6] not in query_roots and len(token) >= 5
-    }
+def _canonical_id(document: SourceDocument) -> str:
+    payload = document.raw_payload if isinstance(document.raw_payload, dict) else {}
+    blob = " ".join(
+        str(part)
+        for part in (document.external_id, document.url, payload.get("id"), payload.get("doi"), payload.get("DOI"))
+        if part
+    )
+    doi = DOI_RE.search(blob)
+    if doi:
+        return f"doi:{doi.group(0).lower().rstrip('.')}"
+    arxiv = ARXIV_ID_RE.search(blob)
+    if arxiv:
+        return f"arxiv:{arxiv.group(1)}"
+    bare = re.fullmatch(r"(\d{4}\.\d{4,5})(?:v\d+)?", (document.external_id or "").strip())
+    if bare:
+        return f"arxiv:{bare.group(1)}"
+    return f"title:{_key(document.title)}"
 
 
-def _similar(left: CandidateGroup, right: SourceDocument, query_terms: set[str]) -> bool:
-    """Группирует только статьи об одном проекте: общее слово в названии обязательно."""
-    left_tokens = _specific_tokens(left.title, query_terms)
-    right_tokens = _specific_title_tokens(right, query_terms)
-    if not left_tokens or not right_tokens:
-        return False
-    if len(left_tokens & right_tokens) / len(left_tokens | right_tokens) >= 0.55:
+def _same_work(left: SourceDocument, right: SourceDocument) -> bool:
+    left_id, right_id = _canonical_id(left), _canonical_id(right)
+    if left_id == right_id:
         return True
-    if not (left_tokens & right_tokens):
+    left_kind, right_kind = left_id.split(":", 1)[0], right_id.split(":", 1)[0]
+    if left_kind == right_kind and left_kind in {"doi", "arxiv"} and left_id != right_id:
         return False
-    left_profile = set().union(*(_technical_profile(document, query_terms) for document in left.documents))
-    right_profile = _technical_profile(right, query_terms)
-    return len(left_profile & right_profile) >= 3
+    return SequenceMatcher(None, _key(left.title), _key(right.title)).ratio() >= TITLE_SIMILARITY
 
 
-def _group(documents: list[SourceDocument], query_terms: set[str], query: str) -> list[CandidateGroup]:
+def _group(documents: list[SourceDocument]) -> list[CandidateGroup]:
     groups: list[CandidateGroup] = []
     for document in documents:
-        exact = next((group for group in groups if _key(group.title) == _key(document.title)), None)
-        similar = exact or next((group for group in groups if _similar(group, document, query_terms)), None)
-        if similar:
-            similar.documents.append(document)
+        match = next(
+            (
+                group
+                for group in groups
+                if any(_same_work(existing, document) for existing in group.documents)
+            ),
+            None,
+        )
+        if match:
+            match.documents.append(document)
         else:
             groups.append(CandidateGroup(documents=[document]))
     return groups
 
 
-def _support_matches(group: CandidateGroup, document: SourceDocument, query_terms: set[str]) -> bool:
-    if _key(group.title) == _key(document.title) or _similar(group, document, query_terms):
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _support_overlap(group_specific: set[str], support_specific: set[str]) -> bool:
+    overlap = group_specific & support_specific
+    if not overlap:
+        return False
+    if len(overlap) >= 2:
         return True
-    support_tokens = _tokens(document.title)
-    group_tokens = _tokens(group.title)
-    return bool(support_tokens & group_tokens) and support_tokens <= (group_tokens | query_terms)
+    if any(len(token) >= 8 for token in overlap):
+        return True
+    return _jaccard(group_specific, support_specific) >= SUPPORT_JACCARD
+
+
+def _support_matches(group: CandidateGroup, document: SourceDocument, query_terms: set[str]) -> bool:
+    """Патент и Wikipedia клеятся только к той же работе или по отличительным токенам названия."""
+    if any(_same_work(existing, document) for existing in group.documents):
+        return True
+    support_specific = _specific_tokens(document.title, query_terms)
+    if not support_specific:
+        return False
+    group_specific = _specific_tokens(group.title, query_terms)
+    return _support_overlap(group_specific, support_specific)
 
 
 def _attach_support(groups: list[CandidateGroup], support: list[SourceDocument], query_terms: set[str]) -> None:
-    """Патент и Wikipedia — факторы/доказательства, не самостоятельные проекты."""
+    """Патент и Wikipedia — факторы к уже найденному проекту, не самостоятельные карточки."""
     for document in support:
         match = next((group for group in groups if _support_matches(group, document, query_terms)), None)
-        if match and document not in match.documents:
-            match.documents.append(document)
+        if match is None or document in match.documents:
+            continue
+        if document.source_type == "encyclopedia":
+            wiki_count = sum(1 for item in match.documents if item.source_type == "encyclopedia")
+            if wiki_count >= MAX_WIKI_PER_GROUP:
+                continue
+        elif document.source_type == "patent":
+            patent_count = sum(1 for item in match.documents if item.source_type == "patent")
+            if patent_count >= MAX_PATENTS_PER_GROUP:
+                continue
+        match.documents.append(document)
 
 
 def _has_sufficient_evidence(documents: list[SourceDocument]) -> bool:
-    """Кандидат — научно-технологический проект: ядро из науки + независимое подтверждение."""
-    core = [document for document in documents if document.source_type in CORE_SOURCE_TYPES]
-    if not any(_has_project_abstract(document) for document in core):
-        return False
-    return len({document.url for document in documents}) >= 2
+    """Кандидат — одно научное ядро с описанием. Второй URL не обязателен."""
+    return any(
+        document.source_type in CORE_SOURCE_TYPES and _has_project_abstract(document)
+        for document in documents
+    )
 
 
-def _observation(documents: list[SourceDocument], title: str | None = None) -> dict:
-    first_date = min((doc.published_date for doc in documents if doc.published_date), default=None)
-    source_types = [doc.source_type for doc in documents]
-    return {
-        "title": title or documents[0].title,
-        "description": " ".join(doc.abstract for doc in documents if doc.abstract)[:8000],
-        "source_type": "academic" if "academic" in source_types else source_types[0],
-        "published_date": first_date.isoformat() if first_date else None,
-        "has_patent": "patent" in source_types,
-        "source_trust": round(sum(doc.trust for doc in documents) / len(documents), 3),
+def _lead_core(documents: list[SourceDocument]) -> SourceDocument:
+    cores = [document for document in documents if document.source_type in CORE_SOURCE_TYPES]
+    cores.sort(key=lambda item: item.published_date or date.min, reverse=True)
+    return cores[0] if cores else documents[0]
+
+
+def _adoption(group: CandidateGroup, groups: list[CandidateGroup], query_terms: set[str]) -> tuple[int, list[int]]:
+    specific = _specific_tokens(group.title, query_terms)
+    years: list[int] = []
+    count = 0
+    for other in groups:
+        other_specific = _specific_tokens(other.title, query_terms)
+        close = bool(specific and other_specific and _jaccard(specific, other_specific) >= 0.3)
+        if close or _key(other.title) == _key(group.title):
+            count += 1
+            lead = _lead_core(other.documents)
+            if lead.published_date:
+                years.append(lead.published_date.year)
+    return max(1, count), sorted(years)
+
+
+def _sentences(text: str) -> list[str]:
+    chunks = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    return [chunk.strip() for chunk in chunks if len(chunk.strip()) >= 20]
+
+
+def _case_example(abstract: str) -> str:
+    sentences = _sentences(abstract)
+    return sentences[0][:500] if sentences else ""
+
+
+def _potential_benefit(abstract: str) -> str:
+    for sentence in _sentences(abstract):
+        if APPLICATION_RE.search(sentence):
+            return sentence[:500]
+    return ""
+
+
+def _observation(documents: list[SourceDocument], lead: SourceDocument, mentions: int, years: list[int]) -> dict:
+    source_types = [document.source_type for document in documents]
+    payload = {
+        "title": lead.title,
+        "description": (lead.abstract or "")[:8000],
+        "source_type": "academic" if "academic" in source_types else lead.source_type,
+        "published_date": lead.published_date.isoformat() if lead.published_date else None,
+        "has_patent": any(document.source_type == "patent" for document in documents),
+        "source_trust": round(sum(document.trust for document in documents) / len(documents), 3),
+        "mentions": mentions,
     }
+    if len(set(years)) >= 2:
+        counts = Counter(years)
+        payload["mentions_series"] = [float(counts[year]) for year in sorted(counts)]
+    return payload
 
 
 def _predict(observation: dict) -> dict:
@@ -468,16 +638,11 @@ def _predict(observation: dict) -> dict:
 
 
 def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tuple[int, int, int, list[str]]:
-    """Фильтрует и ранжирует не более 15 подтверждённых слабых сигналов.
-    
-    Args:
-        run: SearchRun объект
-        industry_filter: если задан, фильтрует кандидатов по отрасли (например 'fintech')
-    """
+    """Фильтрует и ранжирует не более 15 подтверждённых слабых сигналов."""
     query_terms = _query_terms(run.query)
     selected_documents = [
         document for document in run.documents.all().order_by("-published_date")
-        if _is_recent(document) and _is_relevant(document, query_terms)
+        if _is_recent(document) and _is_relevant(document, run.query, query_terms)
     ]
     core_documents = [
         document for document in selected_documents
@@ -487,17 +652,19 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         document for document in selected_documents
         if document.source_type in SUPPORT_SOURCE_TYPES and not _is_noise_title(document)
     ]
-    grouped = _group(core_documents, query_terms, run.query)
+    grouped = _group(core_documents)
     _attach_support(grouped, support_documents, query_terms)
     grouped = [group for group in grouped if _has_sufficient_evidence(group.documents)]
 
     run.candidates.all().delete()
     errors: list[str] = []
     created_count = weak_count = high_confidence_count = 0
-    scored: list[tuple[dict, dict, list[SourceDocument], str]] = []
+    scored: list[tuple[dict, SourceDocument, list[SourceDocument], str]] = []
     for group in grouped:
         documents = group.documents
-        observation = _observation(documents, group.title)
+        lead = _lead_core(documents)
+        mentions, years = _adoption(group, grouped, query_terms)
+        observation = _observation(documents, lead, mentions, years)
         try:
             prediction = _predict(observation)
         except Exception as error:
@@ -505,28 +672,30 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
             continue
         if not prediction.get("weak_signal"):
             continue
-        all_categories: list[str] = []
-        for doc in documents:
-            all_categories.extend(doc.categories or [])
-        predicted_industry = _categories_to_industry(all_categories)
+        core_categories: list[str] = []
+        for document in documents:
+            if document.source_type in CORE_SOURCE_TYPES:
+                core_categories.extend(document.categories or [])
+        predicted_industry = _categories_to_industry(core_categories)
         if predicted_industry is None:
-            predicted_industry = classify_industry(observation["title"], observation["description"])
+            predicted_industry = classify_industry(lead.title, lead.abstract or "")
         if industry_filter and predicted_industry != industry_filter:
             continue
-        scored.append((prediction, observation, documents, predicted_industry))
+        scored.append((prediction, lead, documents, predicted_industry))
 
-    for prediction, observation, documents, predicted_industry in sorted(
-        scored, key=lambda item: item[0]["confidence"], reverse=True
-    )[:MAX_CANDIDATES]:
+    ranked = sorted(scored, key=lambda item: item[0]["confidence"], reverse=True)[:MAX_CANDIDATES]
+    high_slots = max(1, len(ranked) // 4)
+    for index, (prediction, lead, documents, predicted_industry) in enumerate(ranked):
+        is_high = prediction["confidence"] >= 0.75 and index < high_slots
         candidate = TechnologyCandidate.objects.create(
             run=run,
-            title=observation["title"],
-            description=observation["description"][:4000],
-            potential_benefit="Требует экспертной оценки по подтверждающим источникам.",
-            case_example="Исходная научная публикация или препринт из списка источников.",
+            title=lead.title,
+            description=(lead.abstract or "")[:4000],
+            potential_benefit=_potential_benefit(lead.abstract or ""),
+            case_example=_case_example(lead.abstract or ""),
             confidence=prediction["confidence"],
             is_weak_signal=True,
-            is_high_confidence=prediction["confidence"] >= 0.75,
+            is_high_confidence=is_high,
             explanation=prediction["explanation"],
             factors=prediction["factors"],
             industry=predicted_industry,
@@ -534,5 +703,5 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         candidate.source_documents.set(documents)
         created_count += 1
         weak_count += int(candidate.is_weak_signal)
-        high_confidence_count += int(candidate.is_high_confidence and candidate.is_weak_signal)
+        high_confidence_count += int(candidate.is_high_confidence)
     return created_count, weak_count, high_confidence_count, errors

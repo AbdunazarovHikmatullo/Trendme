@@ -132,12 +132,26 @@ class PipelineTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
     @patch("pipeline.services._predict")
-    def test_keeps_patent_and_wikipedia_sources(self, predict_mock) -> None:
+    def test_attaches_matching_patent_but_not_generic_wiki(self, predict_mock) -> None:
+        self.run.documents.all().delete()
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="openalex",
+            external_id="https://doi.org/10.1000/nv",
+            title="Laboratory nv-center quantum sensor prototype",
+            abstract="We report an early laboratory prototype of an nv-center quantum sensor with experimental readout.",
+            url="https://doi.org/10.1000/nv",
+            published_date=date(2026, 1, 1),
+            source_name="OpenAlex",
+            source_type="academic",
+            language="en",
+            trust=0.95,
+        )
         SourceDocument.objects.create(
             run=self.run,
             provider="google_patents",
             external_id="US11988619B2",
-            title="Microwave-free quantum sensor based on NV centers",
+            title="Microwave-free nv-center quantum sensor prototype",
             abstract="A quantum sensor prototype for early laboratory research based on nitrogen-vacancy centers.",
             url="https://patents.google.com/patent/US11988619B2",
             published_date=date(2025, 3, 1),
@@ -163,13 +177,10 @@ class PipelineTests(TestCase):
             "confidence": 0.88, "weak_signal": True, "explanation": "объяснение", "factors": [],
         }
         finalize_search.run([], str(self.run.id))
-        providers = {
-            source.provider
-            for candidate in self.run.candidates.all()
-            for source in candidate.source_documents.all()
-        }
+        candidate = self.run.candidates.get()
+        providers = {source.provider for source in candidate.source_documents.all()}
         self.assertIn("google_patents", providers)
-        self.assertIn("wikipedia", providers)
+        self.assertNotIn("wikipedia", providers)
 
     @patch("pipeline.services._predict")
     def test_skips_strong_signal(self, predict_mock) -> None:
@@ -247,6 +258,12 @@ class PipelineTests(TestCase):
                 "empty-2",
                 "Как измерить искусственный интеллект?",
                 "",
+            ),
+            (
+                "arxiv",
+                "review-1",
+                "Games for Artificial Intelligence Research: A Review and Perspectives",
+                "This article reviews games used as benchmarks for artificial intelligence research and future perspectives.",
             ),
         )
         for provider, external_id, title, abstract in samples:
@@ -329,3 +346,118 @@ class PipelineTests(TestCase):
         finalize_search.run([], str(self.run.id))
         titles = set(self.run.candidates.values_list("title", flat=True))
         self.assertEqual(titles, set(papers))
+
+    @patch("pipeline.services._predict")
+    def test_does_not_merge_different_arxiv_papers(self, predict_mock) -> None:
+        self.run.documents.all().delete()
+        papers = (
+            ("http://arxiv.org/abs/2404.18293", "Quantum learning with a single-atom sensor prototype"),
+            ("http://arxiv.org/abs/2606.15071", "Muonium spectroscopy with a laboratory quantum sensor device"),
+        )
+        abstract = "We report an experimental prototype of a laboratory quantum sensor device with readout electronics."
+        for external_id, title in papers:
+            SourceDocument.objects.create(
+                run=self.run,
+                provider="arxiv",
+                external_id=external_id,
+                title=title,
+                abstract=abstract,
+                url=external_id,
+                published_date=date(2026, 2, 1),
+                source_name="arXiv",
+                source_type="preprint",
+                language="en",
+                trust=0.85,
+            )
+        predict_mock.return_value = {
+            "confidence": 0.8, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        titles = set(self.run.candidates.values_list("title", flat=True))
+        self.assertEqual(titles, {title for _, title in papers})
+
+    @patch("pipeline.services._predict")
+    def test_unrelated_patent_is_not_attached(self, predict_mock) -> None:
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="google_patents",
+            external_id="US-UNRELATED",
+            title="Quantum sensor array for industrial metrology calibration",
+            abstract="A patented quantum sensor unrelated to the laboratory prototype paper.",
+            url="https://patents.google.com/patent/US-UNRELATED",
+            published_date=date(2025, 1, 1),
+            source_name="Google Patents",
+            source_type="patent",
+            language="en",
+            trust=0.95,
+        )
+        predict_mock.return_value = {
+            "confidence": 0.8, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        providers = {
+            source.provider
+            for candidate in self.run.candidates.all()
+            for source in candidate.source_documents.all()
+        }
+        self.assertNotIn("google_patents", providers)
+
+    @patch("pipeline.services._predict")
+    def test_rejects_offtopic_blockchain_and_routing(self, predict_mock) -> None:
+        self.run.documents.all().delete()
+        samples = (
+            "Post-Quantum Sensor-to-Blockchain Communication Security",
+            "Energy Efficient Sensor Network Routing using A Quantum Processor",
+        )
+        abstract = "We report an experimental prototype of a quantum sensor device for laboratory use."
+        for index, title in enumerate(samples):
+            SourceDocument.objects.create(
+                run=self.run,
+                provider="arxiv",
+                external_id=f"http://arxiv.org/abs/2601.1000{index}",
+                title=title,
+                abstract=abstract,
+                url=f"http://arxiv.org/abs/2601.1000{index}",
+                published_date=date(2026, 2, 1),
+                source_name="arXiv",
+                source_type="preprint",
+                language="en",
+                trust=0.85,
+            )
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+        predict_mock.assert_not_called()
+
+    @patch("pipeline.services._predict")
+    def test_single_core_paper_is_enough(self, predict_mock) -> None:
+        self.run.documents.exclude(provider="openalex").delete()
+        predict_mock.return_value = {
+            "confidence": 0.82, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        candidate = self.run.candidates.get()
+        self.assertEqual(candidate.source_documents.count(), 1)
+        self.assertEqual(candidate.title, "Laboratory quantum sensor prototype")
+
+    @patch("pipeline.services._predict")
+    def test_observation_includes_mentions(self, predict_mock) -> None:
+        predict_mock.return_value = {
+            "confidence": 0.82, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        observation = predict_mock.call_args[0][0]
+        self.assertIn("mentions", observation)
+        self.assertGreaterEqual(observation["mentions"], 1)
+        self.assertEqual(observation["description"].count("Early research prototype"), 1)
+
+    @patch("pipeline.services._predict")
+    def test_api_source_includes_title_and_role(self, predict_mock) -> None:
+        predict_mock.return_value = {
+            "confidence": 0.82, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        response = APIClient().get(f"/api/searches/{self.run.id}/")
+        self.assertEqual(response.status_code, 200)
+        source = response.data["candidates"][0]["sources"][0]
+        self.assertTrue(source["title"])
+        self.assertEqual(source["role"], "core")
