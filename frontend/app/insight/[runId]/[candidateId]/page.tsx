@@ -62,7 +62,7 @@ export default function InsightPage({
 }
 
 function InsightReport({ run, item }: { run: SearchRun; item: Candidate }) {
-  const level = scoreLevel(item.confidence);
+  const level = scoreLevel(item.confidence, item.is_high_confidence);
   const percent = scorePercent(item.confidence);
   const predictors = predictorChips(item);
   const benefits = splitItems(item.potential_benefit);

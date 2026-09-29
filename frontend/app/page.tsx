@@ -260,7 +260,7 @@ export default function Home() {
                 <tbody>
                   {visible.map((item, index) => {
                     const open = openIds.has(item.id);
-                    const level = scoreLevel(item.confidence);
+                    const level = scoreLevel(item.confidence, item.is_high_confidence);
                     const chips = predictorChips(item);
                     return (
                       <Fragment key={item.id}>

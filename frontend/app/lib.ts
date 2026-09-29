@@ -65,7 +65,11 @@ export function scorePercent(value: number) {
   return Math.round(value * 100);
 }
 
-export function scoreLevel(value: number): "high" | "mid" | "low" {
+export function scoreLevel(value: number, isHighConfidence?: boolean): "high" | "mid" | "low" {
+  if (isHighConfidence === true) return "high";
+  if (isHighConfidence === false) {
+    return value >= 0.5 ? "mid" : "low";
+  }
   if (value >= 0.75) return "high";
   if (value >= 0.5) return "mid";
   return "low";
