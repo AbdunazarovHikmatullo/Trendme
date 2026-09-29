@@ -461,3 +461,51 @@ class PipelineTests(TestCase):
         source = response.data["candidates"][0]["sources"][0]
         self.assertTrue(source["title"])
         self.assertEqual(source["role"], "core")
+
+    @patch("pipeline.services._predict")
+    def test_crowded_topic_sends_higher_mentions_than_unique(self, predict_mock) -> None:
+        self.run.documents.all().delete()
+        abstract = "We report an experimental prototype of a laboratory quantum sensor device with readout electronics."
+        crowded = (
+            "Laboratory nv-center quantum sensor prototype alpha",
+            "Portable nv-center quantum sensor prototype bravo",
+            "Chip-scale nv-center quantum sensor prototype charlie",
+        )
+        unique = "Muonium spectroscopy quantum sensor prototype for axion searches"
+        for index, title in enumerate((*crowded, unique)):
+            SourceDocument.objects.create(
+                run=self.run,
+                provider="arxiv",
+                external_id=f"http://arxiv.org/abs/2603.2000{index}",
+                title=title,
+                abstract=abstract,
+                url=f"http://arxiv.org/abs/2603.2000{index}",
+                published_date=date(2026, 3, 1),
+                source_name="arXiv",
+                source_type="preprint",
+                language="en",
+                trust=0.85,
+            )
+        predict_mock.return_value = {
+            "confidence": 0.9, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        mentions_by_title = {
+            call.args[0]["title"]: call.args[0]["mentions"]
+            for call in predict_mock.call_args_list
+        }
+        self.assertGreater(mentions_by_title[crowded[0]], mentions_by_title[unique])
+
+    @patch("pipeline.services._predict")
+    def test_skips_commercially_mature_observation(self, predict_mock) -> None:
+        predict_mock.return_value = {
+            "confidence": 0.9,
+            "weak_signal": True,
+            "explanation": "зрелый",
+            "factors": [
+                {"name": "maturity_ratio", "value": 0.05, "direction": -1, "description": "зрелость"},
+                {"name": "emergence_ratio", "value": 0.0, "direction": 1, "description": "зарождение"},
+            ],
+        }
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)

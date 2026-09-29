@@ -61,6 +61,17 @@ APPLICATION_RE = re.compile(
     r"allowing|применен|позволя)\b",
     re.IGNORECASE,
 )
+INSTRUMENT_RE = re.compile(
+    r"\b(?:using|with|via)\b.{0,48}\bquantum sensors?\b",
+    re.IGNORECASE,
+)
+COMMERCIAL_RE = re.compile(
+    r"\b(widely used|industry standard|mass production|commercially available|"
+    r"mainstream|mature market|commodity)\b",
+    re.IGNORECASE,
+)
+MENTIONS_PER_EXTRA_HIT = 40
+MAX_ML_MENTIONS = 400
 OFFTOPIC_MARKERS = (
     ("blockchain", ("blockchain", "блокчейн")),
     ("routing", ("routing", "маршрутиз")),
@@ -577,19 +588,85 @@ def _lead_core(documents: list[SourceDocument]) -> SourceDocument:
     return cores[0] if cores else documents[0]
 
 
-def _adoption(group: CandidateGroup, groups: list[CandidateGroup], query_terms: set[str]) -> tuple[int, list[int]]:
+def _close_topics(left: set[str], right: set[str]) -> bool:
+    overlap = left & right
+    return bool(overlap) and (len(overlap) >= 2 or any(len(token) >= 6 for token in overlap))
+
+
+def _adoption(group: CandidateGroup, corpus: list[SourceDocument], query_terms: set[str]) -> tuple[int, list[int]]:
+    """Сколько разных работ в прогоне про ту же отличительную тему — прокси распространённости."""
     specific = _specific_tokens(group.title, query_terms)
+    group_key = _key(group.title)
+    seen: set[str] = set()
+    hits = 0
     years: list[int] = []
-    count = 0
-    for other in groups:
-        other_specific = _specific_tokens(other.title, query_terms)
-        close = bool(specific and other_specific and _jaccard(specific, other_specific) >= 0.3)
-        if close or _key(other.title) == _key(group.title):
-            count += 1
-            lead = _lead_core(other.documents)
-            if lead.published_date:
-                years.append(lead.published_date.year)
-    return max(1, count), sorted(years)
+    for document in corpus:
+        key = _key(document.title)
+        if key in seen:
+            continue
+        other = _specific_title_tokens(document, query_terms)
+        if key != group_key and not (specific and other and _close_topics(specific, other)):
+            continue
+        seen.add(key)
+        hits += 1
+        if document.published_date:
+            years.append(document.published_date.year)
+    return max(1, hits), sorted(years)
+
+
+def _scale_mentions(corpus_hits: int) -> int:
+    """Переводит частоту в прогоне на шкалу mentions, на которой училась модель (1 vs десятки тысяч)."""
+    hits = max(1, corpus_hits)
+    return min(MAX_ML_MENTIONS, 1 + (hits - 1) * MENTIONS_PER_EXTRA_HIT)
+
+
+def _factor_map(prediction: dict) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for item in prediction.get("factors") or []:
+        name = item.get("name")
+        if not name:
+            continue
+        try:
+            values[str(name)] = float(item.get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _is_strong_signal(prediction: dict, observation: dict) -> bool:
+    """Сильный/зрелый сигнал не попадает в выдачу, даже если logistic saturates на academic."""
+    if not prediction.get("weak_signal"):
+        return True
+    factors = _factor_map(prediction)
+    maturity = factors.get("maturity_ratio", 0.0)
+    emergence = factors.get("emergence_ratio", 0.0)
+    text = f"{observation.get('title', '')} {observation.get('description', '')}"
+    if COMMERCIAL_RE.search(text) and emergence < 0.008:
+        return True
+    return maturity > 0.01 and maturity >= max(emergence, 0.001) * 3
+
+
+def _local_weakness(prediction: dict, observation: dict, corpus_hits: int, max_hits: int) -> float:
+    """Относительная «слабость» внутри прогона: редкость темы + маркеры зарождения."""
+    factors = _factor_map(prediction)
+    emergence = min(1.0, factors.get("emergence_ratio", 0.0) * 40)
+    maturity = min(1.0, factors.get("maturity_ratio", 0.0) * 40)
+    novelty = factors.get("novelty", 0.5)
+    rarity = 1.0 if max_hits <= 1 else max(0.0, 1.0 - (corpus_hits - 1) / max_hits)
+    instrument = 0.25 if INSTRUMENT_RE.search(observation.get("title") or "") else 0.0
+    return max(
+        0.0,
+        min(1.0, 0.38 * rarity + 0.28 * emergence + 0.22 * novelty - 0.30 * maturity - instrument),
+    )
+
+
+def _stretch_confidence(scores: list[float]) -> list[float]:
+    if not scores:
+        return []
+    lowest, highest = min(scores), max(scores)
+    if highest - lowest < 1e-6:
+        return [round(0.68, 4) for _ in scores]
+    return [round(0.56 + 0.36 * (score - lowest) / (highest - lowest), 4) for score in scores]
 
 
 def _sentences(text: str) -> list[str]:
@@ -659,18 +736,18 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
     run.candidates.all().delete()
     errors: list[str] = []
     created_count = weak_count = high_confidence_count = 0
-    scored: list[tuple[dict, SourceDocument, list[SourceDocument], str]] = []
+    scored: list[tuple[dict, SourceDocument, list[SourceDocument], str, int, dict]] = []
     for group in grouped:
         documents = group.documents
         lead = _lead_core(documents)
-        mentions, years = _adoption(group, grouped, query_terms)
-        observation = _observation(documents, lead, mentions, years)
+        corpus_hits, years = _adoption(group, core_documents, query_terms)
+        observation = _observation(documents, lead, _scale_mentions(corpus_hits), years)
         try:
             prediction = _predict(observation)
         except Exception as error:
             errors.append(f"ML: {error}")
             continue
-        if not prediction.get("weak_signal"):
+        if _is_strong_signal(prediction, observation):
             continue
         core_categories: list[str] = []
         for document in documents:
@@ -681,19 +758,31 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
             predicted_industry = classify_industry(lead.title, lead.abstract or "")
         if industry_filter and predicted_industry != industry_filter:
             continue
-        scored.append((prediction, lead, documents, predicted_industry))
+        scored.append((prediction, lead, documents, predicted_industry, corpus_hits, observation))
 
-    ranked = sorted(scored, key=lambda item: item[0]["confidence"], reverse=True)[:MAX_CANDIDATES]
-    high_slots = max(1, len(ranked) // 4)
-    for index, (prediction, lead, documents, predicted_industry) in enumerate(ranked):
-        is_high = prediction["confidence"] >= 0.75 and index < high_slots
+    if not scored:
+        return created_count, weak_count, high_confidence_count, errors
+    max_hits = max(item[4] for item in scored)
+    ml_scores = [item[0]["confidence"] for item in scored]
+    use_local = len(scored) >= 2 and (max(ml_scores) - min(ml_scores)) < 0.05
+    local_scores = [
+        _local_weakness(item[0], item[5], item[4], max_hits) for item in scored
+    ]
+    display_scores = _stretch_confidence(local_scores) if use_local else ml_scores
+    ranked = sorted(
+        zip(scored, display_scores),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:MAX_CANDIDATES]
+    for (prediction, lead, documents, predicted_industry, _hits, _observation), confidence in ranked:
+        is_high = confidence >= 0.75
         candidate = TechnologyCandidate.objects.create(
             run=run,
             title=lead.title,
             description=(lead.abstract or "")[:4000],
             potential_benefit=_potential_benefit(lead.abstract or ""),
             case_example=_case_example(lead.abstract or ""),
-            confidence=prediction["confidence"],
+            confidence=confidence,
             is_weak_signal=True,
             is_high_confidence=is_high,
             explanation=prediction["explanation"],
