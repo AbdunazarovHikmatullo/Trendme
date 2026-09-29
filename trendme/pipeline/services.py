@@ -478,7 +478,7 @@ def _is_broad_query(query: str) -> bool:
 
 
 def _is_instrument_use(title: str, query: str) -> bool:
-    """Статья использует прибор запроса как инструмент, а не описывает сам проект."""
+    """«Изучаем Y with a <прибор запроса>» — это не проект по самому прибору."""
     english = english_search_query(query)
     heads = [part for part in re.split(r"[-\s]+", english.casefold()) if len(part) >= 4]
     if not heads:
@@ -486,7 +486,15 @@ def _is_instrument_use(title: str, query: str) -> bool:
     head = heads[-1]
     if head in {"state", "intelligence"}:
         return False
-    return bool(re.search(rf"\b(?:using|with|via)\b.{{0,48}}\b{re.escape(head)}s?\b", title, re.I))
+    match = re.search(
+        rf"\b(?:using|with|via)\s+(?:a |an |the )?(?:[\w-]+\s+){{0,4}}{re.escape(head)}s?\b",
+        title,
+        re.I,
+    )
+    if not match:
+        return False
+    before = title[:match.start()].casefold()
+    return not re.search(rf"\b{re.escape(head)}s?\b", before)
 
 
 def _is_core_project(document: SourceDocument, query: str, query_terms: set[str]) -> bool:

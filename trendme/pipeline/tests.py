@@ -351,8 +351,8 @@ class PipelineTests(TestCase):
     def test_does_not_merge_different_arxiv_papers(self, predict_mock) -> None:
         self.run.documents.all().delete()
         papers = (
-            ("http://arxiv.org/abs/2404.18293", "Quantum learning with a single-atom sensor prototype"),
-            ("http://arxiv.org/abs/2606.15071", "Muonium spectroscopy with a laboratory quantum sensor device"),
+            ("http://arxiv.org/abs/2404.18293", "Single-atom quantum sensor prototype for quantum learning"),
+            ("http://arxiv.org/abs/2606.15071", "Laboratory quantum sensor device for muonium spectroscopy"),
         )
         abstract = "We report an experimental prototype of a laboratory quantum sensor device with readout electronics."
         for external_id, title in papers:
@@ -596,6 +596,7 @@ class PipelineTests(TestCase):
                 trust=0.9,
             )
         finalize_search.run([], str(self.run.id))
+        self.run.refresh_from_db()
         self.assertEqual(self.run.candidates.count(), 0)
         self.assertTrue(any("no_projects_after_filters" in error for error in self.run.errors))
         predict_mock.assert_not_called()
@@ -622,6 +623,7 @@ class PipelineTests(TestCase):
             "confidence": 0.9, "weak_signal": True, "explanation": "объяснение", "factors": [],
         }
         finalize_search.run([], str(self.run.id))
+        self.run.refresh_from_db()
         self.assertEqual(self.run.candidates.count(), 8)
         self.assertLessEqual(self.run.high_confidence_count, 4)
         self.assertEqual(self.run.high_confidence_count, 2)
@@ -632,6 +634,7 @@ class PipelineTests(TestCase):
         self.run.save(update_fields=["query"])
         self.run.documents.all().delete()
         finalize_search.run([], str(self.run.id))
+        self.run.refresh_from_db()
         self.assertEqual(self.run.candidates.count(), 0)
         self.assertTrue(any("query_not_translated" in error for error in self.run.errors))
         predict_mock.assert_not_called()
