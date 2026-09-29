@@ -35,7 +35,7 @@ NOISE_TITLE_RE = re.compile(
     r"recent advances|progress in|state of the art|state-of-the-art|"
     r"for high energy physics|in organic synthesis|perspectives on|"
     r"in healthcare|in agriculture)\b|"
-    r"\bresearch$|\btutorial\b|features of|"
+    r"\bresearch$|\btutorial\b|features of|mini-review|mini review|"
     r"^список\b|маркетплейс|учетно-контроль|1с:|\bмерч\b|"
     r"конференц|симпозиум|педагогик|образован|как измерить|телесериал|"
     r"спецвыпуск|анонс|круглый стол|философ",
