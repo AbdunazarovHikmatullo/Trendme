@@ -762,20 +762,21 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
 
     if not scored:
         return created_count, weak_count, high_confidence_count, errors
-    max_hits = max(item[4] for item in scored)
-    ml_scores = [item[0]["confidence"] for item in scored]
-    use_local = len(scored) >= 2 and (
+    ml_ranked = sorted(scored, key=lambda item: item[0]["confidence"], reverse=True)[:MAX_CANDIDATES]
+    ml_scores = [item[0]["confidence"] for item in ml_ranked]
+    use_local = len(ml_ranked) >= 2 and (
         max(ml_scores) - min(ml_scores) < 0.05 or min(ml_scores) >= 0.75
     )
+    max_hits = max(item[4] for item in ml_ranked)
     local_scores = [
-        _local_weakness(item[0], item[5], item[4], max_hits) for item in scored
+        _local_weakness(item[0], item[5], item[4], max_hits) for item in ml_ranked
     ]
     display_scores = _stretch_confidence(local_scores) if use_local else ml_scores
     ranked = sorted(
-        zip(scored, display_scores),
+        zip(ml_ranked, display_scores),
         key=lambda item: item[1],
         reverse=True,
-    )[:MAX_CANDIDATES]
+    )
     high_slots = max(1, len(ranked) // 4)
     for index, ((prediction, lead, documents, predicted_industry, _hits, _obs), confidence) in enumerate(ranked):
         is_high = confidence >= 0.75 and (use_local or index < high_slots)
