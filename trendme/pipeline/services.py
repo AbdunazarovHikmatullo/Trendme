@@ -764,7 +764,9 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         return created_count, weak_count, high_confidence_count, errors
     max_hits = max(item[4] for item in scored)
     ml_scores = [item[0]["confidence"] for item in scored]
-    use_local = len(scored) >= 2 and (max(ml_scores) - min(ml_scores)) < 0.05
+    use_local = len(scored) >= 2 and (
+        max(ml_scores) - min(ml_scores) < 0.05 or min(ml_scores) >= 0.75
+    )
     local_scores = [
         _local_weakness(item[0], item[5], item[4], max_hits) for item in scored
     ]
@@ -774,8 +776,9 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         key=lambda item: item[1],
         reverse=True,
     )[:MAX_CANDIDATES]
-    for (prediction, lead, documents, predicted_industry, _hits, _obs), confidence in ranked:
-        is_high = confidence >= 0.75
+    high_slots = max(1, len(ranked) // 4)
+    for index, ((prediction, lead, documents, predicted_industry, _hits, _obs), confidence) in enumerate(ranked):
+        is_high = confidence >= 0.75 and (use_local or index < high_slots)
         candidate = TechnologyCandidate.objects.create(
             run=run,
             title=lead.title,
