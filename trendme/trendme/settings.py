@@ -30,7 +30,7 @@ SECRET_KEY = os.environ.get(
 DEBUG = os.environ.get('DEBUG', '1') == '1'
 
 ALLOWED_HOSTS = [host.strip() for host in os.environ.get(
-    'DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1'
+    'DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,trendme.hikmatullo.site'
 ).split(',') if host.strip()]
 
 
@@ -140,10 +140,10 @@ STATIC_ROOT = os.environ.get('STATIC_ROOT', BASE_DIR / 'staticfiles')
 # сохраняет возможность обращаться к API напрямую с разрешённых адресов.
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get(
-    'CORS_ALLOWED_ORIGINS', 'http://localhost,http://127.0.0.1,http://64.188.60.125'
+    'CORS_ALLOWED_ORIGINS', 'http://localhost,http://127.0.0.1,http://64.188.60.125,trendme.hikmatullo.site'
 ).split(',') if origin.strip()]
 CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in os.environ.get(
-    'DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost,http://127.0.0.1,http://64.188.60.125'
+    'DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost,http://127.0.0.1,http://64.188.60.125,trendme.hikmatullo.site'
 ).split(',') if origin.strip()]
 
 # Django REST Framework
