@@ -495,7 +495,7 @@ def _same_work(left: SourceDocument, right: SourceDocument) -> bool:
     if left_id == right_id:
         return True
     left_kind, right_kind = left_id.split(":", 1)[0], right_id.split(":", 1)[0]
-    if left_kind == right_kind and left_kind in {"doi", "arxiv"} and left_id != right_id:
+    if left_kind == right_kind:
         return False
     return SequenceMatcher(None, _key(left.title), _key(right.title)).ratio() >= TITLE_SIMILARITY
 
