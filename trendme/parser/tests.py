@@ -20,6 +20,14 @@ class SourceQueryTests(SimpleTestCase):
         self.assertEqual(english_search_query("квантовые сенсоры"), "quantum sensor")
         self.assertEqual(english_search_query("робототехника"), "robot")
         self.assertEqual(english_search_query("Искусственный интеллект"), "artificial intelligence")
+        self.assertEqual(english_search_query("нейроморфные процессоры"), "neuromorphic processor")
+        self.assertEqual(english_search_query("перовскитные солнечные элементы"), "perovskite solar")
+        self.assertEqual(english_search_query("твердотельные батареи"), "solid-state battery")
+        self.assertEqual(english_search_query("твёрдотельные батареи"), "solid-state battery")
+
+    def test_untranslated_cyrillic_query_is_empty(self) -> None:
+        self.assertEqual(english_search_query("топологические изоляторы"), "")
+        self.assertEqual(_arxiv_query("топологические изоляторы"), "")
 
 
 class GooglePatentsUrlTests(SimpleTestCase):

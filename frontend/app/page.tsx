@@ -17,6 +17,26 @@ import {
 
 const VISIBLE_WHEN_COLLAPSED = 15;
 
+function emptyStateCopy(run: SearchRun): { title: string; text: string } {
+  const joined = run.errors.join(" ");
+  if (joined.includes("query_not_translated")) {
+    return {
+      title: "Запрос не удалось сопоставить с англоязычными источниками",
+      text: "Сформулируйте тему конкретнее или добавьте английский термин. Сырой кириллический запрос в arXiv и OpenAlex не отправляется.",
+    };
+  }
+  if (joined.includes("no_projects_after_filters")) {
+    return {
+      title: "Источники нашлись, но проектов не осталось",
+      text: `Обработано ${run.processed_sources} документов. Обзоры, использование прибора как инструмента и слишком широкие темы отсекаются — это не зарождающиеся проекты.`,
+    };
+  }
+  return {
+    title: "По этому направлению пока не нашли зарождающихся трендов",
+    text: "Попробуйте изменить формулировку запроса или выбрать другое направление",
+  };
+}
+
 function SearchForm({
   query,
   setQuery,
@@ -185,8 +205,11 @@ export default function Home() {
       {done && run && run.candidates.length === 0 && (
         <section className="empty-state" role="status">
           <Ic id="i-empty" size={42} />
-          <p className="empty-state__title">По этому направлению пока не нашли зарождающихся трендов</p>
-          <p className="empty-state__text">Попробуйте изменить формулировку запроса или выбрать другое направление</p>
+          <p className="empty-state__title">{emptyStateCopy(run).title}</p>
+          <p className="empty-state__text">{emptyStateCopy(run).text}</p>
+          {run.processed_sources > 0 && (
+            <p className="empty-state__text">Источников: {run.processed_sources}</p>
+          )}
         </section>
       )}
 
@@ -204,9 +227,9 @@ export default function Home() {
               <a className="stat__note stat__note--link" href="#list">Перейти к полному списку <Ic id="i-arrow-right" size={12} /></a>
             </div>
             <div className="stat">
-              <div className="stat__label"><Ic id="i-check-circle" size={14} />Подтверждённых сигналов (уверенность &gt; 75%)</div>
+              <div className="stat__label"><Ic id="i-check-circle" size={14} />Подтверждённых сигналов (топ 25%, не больше 4)</div>
               <div className="stat__value stat__value--green">{run.high_confidence_count}</div>
-              <div className="stat__note">Высокая уверенность модели</div>
+              <div className="stat__note">Относительно этого прогона, не абсолютный порог ML</div>
             </div>
           </section>
 

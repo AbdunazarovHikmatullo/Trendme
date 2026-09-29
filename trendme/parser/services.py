@@ -32,7 +32,33 @@ SOURCE_QUERY_ALIASES = {
     "искусственн": ("artificial",),
     "интеллект": ("intelligence", "neural"),
     "нейросет": ("neural",),
+    "нейроморф": ("neuromorphic",),
+    "процессор": ("processor", "chip"),
+    "перовскит": ("perovskite",),
+    "солнечн": ("solar", "photovoltaic"),
+    "фотовольта": ("photovoltaic", "solar"),
+    "твердотельн": ("solid-state", "solid"),
+    "твёрдотельн": ("solid-state", "solid"),
+    "батаре": ("battery",),
+    "аккумулятор": ("battery",),
 }
+
+
+def english_search_query(query: str) -> str:
+    """Каноническая английская фраза для API и title-gate. Пусто, если кириллица не переведена."""
+    normalized = query.casefold()
+    terms: list[str] = []
+    for russian_stem, aliases in SOURCE_QUERY_ALIASES.items():
+        if russian_stem in normalized:
+            terms.append(aliases[0])
+    if terms:
+        return " ".join(dict.fromkeys(terms))
+    latin = [term for term in re.findall(r"[a-z0-9-]+", normalized) if len(term) >= 3]
+    return " ".join(dict.fromkeys(latin))
+
+
+def query_needs_translation(query: str) -> bool:
+    return bool(re.search(r"[а-яё]", query.casefold())) and not english_search_query(query)
 
 
 def _request(url: str, accept: str, timeout: int = 20, headers: dict[str, str] | None = None) -> bytes:
@@ -71,19 +97,6 @@ def _strip_markup(text: str) -> str:
     return " ".join(cleaned.split())
 
 
-def english_search_query(query: str) -> str:
-    """Переводит русские стебли в английские термины для англоязычных API."""
-    normalized = query.casefold()
-    terms: list[str] = []
-    for russian_stem, aliases in SOURCE_QUERY_ALIASES.items():
-        if russian_stem in normalized:
-            terms.append(aliases[0])
-    if terms:
-        return " ".join(dict.fromkeys(terms))
-    latin = [term for term in re.findall(r"[a-z0-9-]+", normalized) if len(term) >= 3]
-    return " ".join(dict.fromkeys(latin)) or query.strip()
-
-
 def _abstract(index: Any) -> str:
     if not isinstance(index, dict):
         return ""
@@ -96,18 +109,16 @@ def _abstract(index: Any) -> str:
 
 def _arxiv_query(query: str) -> str:
     """arXiv преимущественно индексирует англоязычные метаданные."""
-    terms: list[str] = []
-    normalized = query.casefold()
-    for russian_stem, aliases in SOURCE_QUERY_ALIASES.items():
-        if russian_stem in normalized:
-            terms.append(aliases[0])
-    if not terms:
-        terms = [term for term in re.findall(r"[a-z0-9-]+", normalized) if len(term) >= 3]
-    return " AND ".join(f"all:{term}" for term in dict.fromkeys(terms)) or f"all:{query}"
+    english = english_search_query(query)
+    terms = [term for term in english.replace("-", " ").split() if len(term) >= 3]
+    return " AND ".join(f"all:{term}" for term in dict.fromkeys(terms))
 
 
 def openalex(query: str, limit: int = 30) -> list[dict[str, Any]]:
-    params = urlencode({"search": english_search_query(query), "per-page": limit})
+    search = english_search_query(query)
+    if not search:
+        return []
+    params = urlencode({"search": search, "per-page": limit})
     payload = json.loads(_request(f"https://api.openalex.org/works?{params}", "application/json").decode("utf-8"))
     documents = []
     for item in payload.get("results", []):
@@ -150,7 +161,10 @@ def _extract_openalex_categories(item: dict) -> list[str]:
 
 
 def arxiv(query: str, limit: int = 30) -> list[dict[str, Any]]:
-    params = urlencode({"search_query": _arxiv_query(query), "start": 0, "max_results": limit})
+    search_query = _arxiv_query(query)
+    if not search_query:
+        return []
+    params = urlencode({"search_query": search_query, "start": 0, "max_results": limit})
     root = ElementTree.fromstring(_request(f"https://export.arxiv.org/api/query?{params}", "application/atom+xml").decode("utf-8"))
     namespace = {"atom": "http://www.w3.org/2005/Atom"}
     documents = []
@@ -191,6 +205,8 @@ def build_google_patents_url(query: str, limit: int = 20) -> str:
 def google_patents(query: str, limit: int = 20) -> list[dict[str, Any]]:
     """Патенты: Google Patents JSON, при блоке — Europe PMC (SRC:PAT)."""
     english = english_search_query(query)
+    if not english:
+        return []
     try:
         return _google_patents_xhr(english, limit)
     except (HTTPError, TimeoutError, OSError, json.JSONDecodeError, KeyError, ValueError):
@@ -267,7 +283,10 @@ def _europepmc_patents(query: str, limit: int) -> list[dict[str, Any]]:
 
 def wikipedia(query: str, limit: int = 8) -> list[dict[str, Any]]:
     """Статьи Wikipedia: английская вики по EN-запросу и русская по исходному."""
-    documents = _wikipedia_lang("en", english_search_query(query), limit)
+    documents: list[dict[str, Any]] = []
+    english = english_search_query(query)
+    if english:
+        documents.extend(_wikipedia_lang("en", english, limit))
     russian_query = query.strip()
     if re.search(r"[а-яё]", russian_query.casefold()):
         documents.extend(_wikipedia_lang("ru", russian_query, limit))
@@ -328,10 +347,13 @@ def _wikipedia_lang(lang: str, query: str, limit: int) -> list[dict[str, Any]]:
 
 def crossref(query: str, limit: int = 20) -> list[dict[str, Any]]:
     """Издательские записи Crossref (DOI) — независимый академический контур."""
+    search = english_search_query(query)
+    if not search:
+        return []
     payload = _parse_json(
         "https://api.crossref.org/works?"
         + urlencode({
-            "query": english_search_query(query),
+            "query": search,
             "rows": max(limit, 20),
             "filter": "type:journal-article,type:proceedings-article,type:posted-content",
         }),
@@ -376,10 +398,13 @@ def crossref(query: str, limit: int = 20) -> list[dict[str, Any]]:
 
 def europepmc(query: str, limit: int = 20) -> list[dict[str, Any]]:
     """PubMed / Europe PMC — медицина, биотех и смежные публикации."""
+    search = english_search_query(query)
+    if not search:
+        return []
     payload = _parse_json(
         "https://www.ebi.ac.uk/europepmc/webservices/rest/search?"
         + urlencode({
-            "query": f"({english_search_query(query)}) NOT SRC:PAT",
+            "query": f"({search}) NOT SRC:PAT",
             "format": "json",
             "pageSize": limit,
             "resultType": "core",

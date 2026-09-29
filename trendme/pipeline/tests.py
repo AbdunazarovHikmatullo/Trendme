@@ -509,3 +509,129 @@ class PipelineTests(TestCase):
         }
         finalize_search.run([], str(self.run.id))
         self.assertEqual(self.run.candidates.count(), 0)
+
+    @patch("pipeline.services._predict")
+    def test_russian_phrase_dictionary_finds_english_project(self, predict_mock) -> None:
+        self.run.query = "нейроморфные процессоры"
+        self.run.save(update_fields=["query"])
+        self.run.documents.all().delete()
+        title = "A neuromorphic processor with on-chip spike learning"
+        abstract = "We present an experimental neuromorphic processor prototype with on-chip learning and readout."
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="arxiv",
+            external_id="http://arxiv.org/abs/2604.00001",
+            title=title,
+            abstract=abstract,
+            url="http://arxiv.org/abs/2604.00001",
+            published_date=date(2026, 4, 1),
+            source_name="arXiv",
+            source_type="preprint",
+            language="en",
+            trust=0.85,
+        )
+        predict_mock.return_value = {
+            "confidence": 0.84, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.get().title, title)
+
+    @patch("pipeline.services._predict")
+    def test_rejects_ai_review_and_instrument_use(self, predict_mock) -> None:
+        self.run.query = "Искусственный интеллект"
+        self.run.save(update_fields=["query"])
+        self.run.documents.all().delete()
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="arxiv",
+            external_id="http://arxiv.org/abs/2604.10000",
+            title="Revolutionizing healthcare: the role of artificial intelligence in clinical practice",
+            abstract="We report an experimental laboratory setup and discuss possible applications in the field.",
+            url="http://arxiv.org/abs/2604.10000",
+            published_date=date(2026, 4, 1),
+            source_name="arXiv",
+            source_type="preprint",
+            language="en",
+            trust=0.85,
+        )
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+
+        self.run.query = "квантовые сенсоры"
+        self.run.save(update_fields=["query"])
+        self.run.documents.all().delete()
+        SourceDocument.objects.create(
+            run=self.run,
+            provider="arxiv",
+            external_id="http://arxiv.org/abs/2604.10001",
+            title="Studying phonon coherence with a quantum sensor",
+            abstract="We report an experimental laboratory setup and discuss possible applications in the field.",
+            url="http://arxiv.org/abs/2604.10001",
+            published_date=date(2026, 4, 1),
+            source_name="arXiv",
+            source_type="preprint",
+            language="en",
+            trust=0.85,
+        )
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+        predict_mock.assert_not_called()
+
+    @patch("pipeline.services._predict")
+    def test_empty_after_many_sources_is_honest_error(self, predict_mock) -> None:
+        self.run.documents.all().delete()
+        abstract = "A generic overview of the field without a device or prototype description at all."
+        for index in range(20):
+            SourceDocument.objects.create(
+                run=self.run,
+                provider="openalex",
+                external_id=f"https://doi.org/10.1000/noise-{index}",
+                title=f"List of quantum sensors volume {index}",
+                abstract=abstract,
+                url=f"https://doi.org/10.1000/noise-{index}",
+                published_date=date(2026, 1, 1),
+                source_name="OpenAlex",
+                source_type="academic",
+                language="en",
+                trust=0.9,
+            )
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+        self.assertTrue(any("no_projects_after_filters" in error for error in self.run.errors))
+        predict_mock.assert_not_called()
+
+    @patch("pipeline.services._predict")
+    def test_high_confidence_is_capped(self, predict_mock) -> None:
+        self.run.documents.all().delete()
+        abstract = "We report an experimental prototype of a laboratory quantum sensor device with readout electronics."
+        for index in range(8):
+            SourceDocument.objects.create(
+                run=self.run,
+                provider="arxiv",
+                external_id=f"http://arxiv.org/abs/2605.1000{index}",
+                title=f"Laboratory quantum sensor prototype {index} unique-token-{index}",
+                abstract=abstract,
+                url=f"http://arxiv.org/abs/2605.1000{index}",
+                published_date=date(2026, 5, 1),
+                source_name="arXiv",
+                source_type="preprint",
+                language="en",
+                trust=0.85,
+            )
+        predict_mock.return_value = {
+            "confidence": 0.9, "weak_signal": True, "explanation": "объяснение", "factors": [],
+        }
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 8)
+        self.assertLessEqual(self.run.high_confidence_count, 4)
+        self.assertEqual(self.run.high_confidence_count, 2)
+
+    @patch("pipeline.services._predict")
+    def test_untranslated_query_records_error(self, predict_mock) -> None:
+        self.run.query = "топологические изоляторы"
+        self.run.save(update_fields=["query"])
+        self.run.documents.all().delete()
+        finalize_search.run([], str(self.run.id))
+        self.assertEqual(self.run.candidates.count(), 0)
+        self.assertTrue(any("query_not_translated" in error for error in self.run.errors))
+        predict_mock.assert_not_called()

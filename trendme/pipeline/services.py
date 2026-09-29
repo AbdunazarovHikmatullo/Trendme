@@ -12,7 +12,7 @@ from difflib import SequenceMatcher
 from urllib.request import Request, urlopen
 
 from parser.models import SourceDocument
-from parser.services import SOURCE_QUERY_ALIASES, english_search_query
+from parser.services import SOURCE_QUERY_ALIASES, english_search_query, query_needs_translation
 
 from .models import SearchRun, TechnologyCandidate
 
@@ -30,7 +30,12 @@ NOISE_TITLE_RE = re.compile(
     r"systematic review|a review|review and|philosophical|ontological|"
     r"fermi paradox|social interaction|comparison of humans|metaverse|"
     r"education|postgraduate|survey|helpfulness|limits of|limit of|bounds on|"
-    r"a theory of|theory of|comment on|towards understanding)\b|"
+    r"a theory of|theory of|comment on|towards understanding|"
+    r"the role of|revolutionizing|in clinical practice|the future of|"
+    r"recent advances|progress in|state of the art|state-of-the-art|"
+    r"for high energy physics|in organic synthesis|perspectives on|"
+    r"in healthcare|in agriculture)\b|"
+    r"\bresearch$|"
     r"^список\b|маркетплейс|учетно-контроль|1с:|\bмерч\b|"
     r"конференц|симпозиум|педагогик|образован|как измерить|телесериал|"
     r"спецвыпуск|анонс|круглый стол|философ",
@@ -51,7 +56,8 @@ ARTIFACT_RE = re.compile(
     r"we report|we present|we demonstrate|we propose|we develop|"
     r"architecture|instrument|magnetometer|accelerometer|implementation|"
     r"experimental|experiment|readout|transducer|qubit|nv-center|"
-    r"nitrogen-vacancy|apparatus|setup|"
+    r"nitrogen-vacancy|apparatus|setup|accelerator|processor|memristor|"
+    r"electrolyte|anode|cathode|chip-scale|on-chip|"
     r"прототип|устройств|детектор|экспериментальн|демонстрац|"
     r"мы представляем|мы сообщаем)\b",
     re.IGNORECASE,
@@ -65,6 +71,9 @@ INSTRUMENT_RE = re.compile(
     r"\b(?:using|with|via)\b.{0,48}\bquantum sensors?\b",
     re.IGNORECASE,
 )
+FIELD_ONLY_STEMS = frozenset({
+    "искусственн", "интеллект", "нейросет", "энерг", "технолог",
+})
 COMMERCIAL_RE = re.compile(
     r"\b(widely used|industry standard|mass production|commercially available|"
     r"mainstream|mature market|commodity)\b",
@@ -463,14 +472,34 @@ def _has_artifact(document: SourceDocument) -> bool:
     return bool(ARTIFACT_RE.search(f"{document.title} {document.abstract[:2000]}"))
 
 
-def _is_core_project(document: SourceDocument, query_terms: set[str]) -> bool:
-    """Ядро выдачи: конкретный научный проект с описанием, не новость и не тема целиком."""
-    return (
-        not _is_noise_title(document)
-        and not _is_generic_topic(document, query_terms)
-        and _has_project_abstract(document)
-        and _has_artifact(document)
-    )
+def _is_broad_query(query: str) -> bool:
+    matched = [stem for stem in QUERY_ALIASES if stem in query.casefold()]
+    return bool(matched) and all(stem in FIELD_ONLY_STEMS for stem in matched)
+
+
+def _is_instrument_use(title: str, query: str) -> bool:
+    """Статья использует прибор запроса как инструмент, а не описывает сам проект."""
+    english = english_search_query(query)
+    heads = [part for part in re.split(r"[-\s]+", english.casefold()) if len(part) >= 4]
+    if not heads:
+        return False
+    head = heads[-1]
+    if head in {"state", "intelligence"}:
+        return False
+    return bool(re.search(rf"\b(?:using|with|via)\b.{{0,48}}\b{re.escape(head)}s?\b", title, re.I))
+
+
+def _is_core_project(document: SourceDocument, query: str, query_terms: set[str]) -> bool:
+    """Ядро выдачи: конкретный научный проект с описанием, не обзор и не тема целиком."""
+    if _is_noise_title(document) or _is_generic_topic(document, query_terms):
+        return False
+    if _is_instrument_use(document.title, query):
+        return False
+    if not _has_project_abstract(document):
+        return False
+    if _is_broad_query(query):
+        return bool(ARTIFACT_RE.search(document.title))
+    return _has_artifact(document)
 
 
 def _is_recent(document: SourceDocument) -> bool:
@@ -723,7 +752,7 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
     ]
     core_documents = [
         document for document in selected_documents
-        if document.source_type in CORE_SOURCE_TYPES and _is_core_project(document, query_terms)
+        if document.source_type in CORE_SOURCE_TYPES and _is_core_project(document, run.query, query_terms)
     ]
     support_documents = [
         document for document in selected_documents
@@ -735,6 +764,8 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
 
     run.candidates.all().delete()
     errors: list[str] = []
+    if query_needs_translation(run.query):
+        errors.append("query_not_translated: нет английского соответствия запроса")
     created_count = weak_count = high_confidence_count = 0
     scored: list[tuple[dict, SourceDocument, list[SourceDocument], str, int, dict]] = []
     for group in grouped:
@@ -753,14 +784,18 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         for document in documents:
             if document.source_type in CORE_SOURCE_TYPES:
                 core_categories.extend(document.categories or [])
-        predicted_industry = _categories_to_industry(core_categories)
-        if predicted_industry is None:
-            predicted_industry = classify_industry(lead.title, lead.abstract or "")
+        predicted_industry = _categories_to_industry(core_categories) or TechnologyCandidate.Industry.OTHER.value
         if industry_filter and predicted_industry != industry_filter:
             continue
         scored.append((prediction, lead, documents, predicted_industry, corpus_hits, observation))
 
     if not scored:
+        if run.documents.count() >= 20:
+            errors.append(
+                "no_projects_after_filters: "
+                f"sources={run.documents.count()} relevant={len(selected_documents)} "
+                f"core={len(core_documents)}"
+            )
         return created_count, weak_count, high_confidence_count, errors
     ml_ranked = sorted(scored, key=lambda item: item[0]["confidence"], reverse=True)[:MAX_CANDIDATES]
     ml_scores = [item[0]["confidence"] for item in ml_ranked]
@@ -777,9 +812,9 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         key=lambda item: item[1],
         reverse=True,
     )
-    high_slots = max(1, len(ranked) // 4)
+    high_slots = min(4, max(1, len(ranked) // 4))
     for index, ((prediction, lead, documents, predicted_industry, _hits, _obs), confidence) in enumerate(ranked):
-        is_high = confidence >= 0.75 and (use_local or index < high_slots)
+        is_high = index < high_slots
         candidate = TechnologyCandidate.objects.create(
             run=run,
             title=lead.title,
