@@ -774,7 +774,7 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
         key=lambda item: item[1],
         reverse=True,
     )[:MAX_CANDIDATES]
-    for (prediction, lead, documents, predicted_industry, _hits, _observation), confidence in ranked:
+    for (prediction, lead, documents, predicted_industry, _hits, _obs), confidence in ranked:
         is_high = confidence >= 0.75
         candidate = TechnologyCandidate.objects.create(
             run=run,
