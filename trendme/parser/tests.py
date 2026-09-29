@@ -1,6 +1,8 @@
 from django.test import SimpleTestCase
+from unittest.mock import patch
 
 from .services import (
+    _BRIDGE_CACHE,
     _arxiv_query,
     _extract_patent_id,
     _parse_html_date,
@@ -12,6 +14,9 @@ from .services import (
 
 
 class SourceQueryTests(SimpleTestCase):
+    def setUp(self) -> None:
+        _BRIDGE_CACHE.clear()
+
     def test_translates_known_russian_terms_for_arxiv(self) -> None:
         self.assertIn("all:quantum", _arxiv_query("квантовые сенсоры"))
         self.assertIn("all:sensor", _arxiv_query("квантовые сенсоры"))
@@ -25,9 +30,15 @@ class SourceQueryTests(SimpleTestCase):
         self.assertEqual(english_search_query("твердотельные батареи"), "solid-state battery")
         self.assertEqual(english_search_query("твёрдотельные батареи"), "solid-state battery")
 
-    def test_untranslated_cyrillic_query_is_empty(self) -> None:
-        self.assertEqual(english_search_query("топологические изоляторы"), "")
+    @patch("parser.services._bridge_english", return_value="")
+    def test_unknown_russian_falls_back_to_original_query(self, _bridge) -> None:
+        self.assertEqual(english_search_query("топологические изоляторы"), "топологические изоляторы")
         self.assertEqual(_arxiv_query("топологические изоляторы"), "")
+
+    @patch("parser.services._bridge_english", return_value="Topological insulator")
+    def test_unknown_russian_bridges_to_english_sources(self, _bridge) -> None:
+        self.assertEqual(english_search_query("топологические изоляторы"), "Topological insulator")
+        self.assertIn("all:topological", _arxiv_query("топологические изоляторы"))
 
 
 class GooglePatentsUrlTests(SimpleTestCase):

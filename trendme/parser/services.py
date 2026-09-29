@@ -44,8 +44,8 @@ SOURCE_QUERY_ALIASES = {
 }
 
 
-def english_search_query(query: str) -> str:
-    """Каноническая английская фраза для API и title-gate. Пусто, если кириллица не переведена."""
+def _local_english(query: str) -> str:
+    """Словарь и уже латинский запрос — без сети."""
     normalized = query.casefold()
     terms: list[str] = []
     for russian_stem, aliases in SOURCE_QUERY_ALIASES.items():
@@ -57,8 +57,94 @@ def english_search_query(query: str) -> str:
     return " ".join(dict.fromkeys(latin))
 
 
-def query_needs_translation(query: str) -> bool:
-    return bool(re.search(r"[а-яё]", query.casefold())) and not english_search_query(query)
+def _latin_terms(text: str) -> list[str]:
+    return [term for term in re.findall(r"[A-Za-z0-9-]{3,}", text) if term.lower() not in {"the", "and", "for"}]
+
+
+def _wikipedia_english(query: str) -> str:
+    """Русская статья Wikipedia → английское название через langlinks."""
+    search = _parse_json(
+        "https://ru.wikipedia.org/w/api.php?"
+        + urlencode({
+            "action": "query", "list": "search", "srsearch": query,
+            "srlimit": 3, "format": "json",
+        }),
+        timeout=12,
+    )
+    titles = [
+        str(item.get("title") or "").strip()
+        for item in ((search.get("query") or {}).get("search") or [])
+        if item.get("title")
+    ]
+    if not titles:
+        return ""
+    links = _parse_json(
+        "https://ru.wikipedia.org/w/api.php?"
+        + urlencode({
+            "action": "query", "prop": "langlinks", "lllang": "en",
+            "titles": "|".join(titles), "format": "json",
+        }),
+        timeout=12,
+    )
+    pages = ((links.get("query") or {}).get("pages") or {})
+    for page in pages.values():
+        if not isinstance(page, dict):
+            continue
+        for langlink in page.get("langlinks") or []:
+            title = str(langlink.get("*") or langlink.get("title") or "").strip()
+            if _latin_terms(title):
+                return title
+    return ""
+
+
+def _mymemory_english(query: str) -> str:
+    """Запасной перевод без ключа, если Wikipedia не знает термин."""
+    payload = _parse_json(
+        "https://api.mymemory.translated.net/get?"
+        + urlencode({"q": query, "langpair": "ru|en"}),
+        timeout=10,
+    )
+    text = str(((payload.get("responseData") or {}).get("translatedText") or "")).strip()
+    if not text or text.casefold() == query.casefold():
+        return ""
+    return " ".join(_latin_terms(text))
+
+
+def _bridge_english(query: str) -> str:
+    try:
+        title = _wikipedia_english(query)
+        if title:
+            return title
+    except Exception:
+        pass
+    try:
+        translated = _mymemory_english(query)
+        if translated:
+            return translated
+    except Exception:
+        pass
+    return ""
+
+
+_BRIDGE_CACHE: dict[str, str] = {}
+
+
+def english_search_query(query: str) -> str:
+    """Английская фраза для API и title-gate. Русский запрос не отбрасывается."""
+    local = _local_english(query)
+    if local:
+        return local
+    stripped = query.strip()
+    if not re.search(r"[а-яё]", stripped.casefold()):
+        return stripped
+    cached = _BRIDGE_CACHE.get(stripped)
+    if cached:
+        return cached
+    bridged = _bridge_english(stripped)
+    if bridged:
+        _BRIDGE_CACHE[stripped] = bridged
+        return bridged
+    return stripped
 
 
 def _request(url: str, accept: str, timeout: int = 20, headers: dict[str, str] | None = None) -> bytes:
@@ -108,10 +194,9 @@ def _abstract(index: Any) -> str:
 
 
 def _arxiv_query(query: str) -> str:
-    """arXiv преимущественно индексирует англоязычные метаданные."""
-    english = english_search_query(query)
-    terms = [term for term in english.replace("-", " ").split() if len(term) >= 3]
-    return " AND ".join(f"all:{term}" for term in dict.fromkeys(terms))
+    """arXiv индексирует английские метаданные — кириллицу туда не шлём."""
+    terms = [term.casefold() for term in _latin_terms(english_search_query(query).replace("-", " "))]
+    return " AND ".join(f"all:{term}" for term in dict.fromkeys(terms) if len(term) >= 3)
 
 
 def openalex(query: str, limit: int = 30) -> list[dict[str, Any]]:
@@ -285,7 +370,7 @@ def wikipedia(query: str, limit: int = 8) -> list[dict[str, Any]]:
     """Статьи Wikipedia: английская вики по EN-запросу и русская по исходному."""
     documents: list[dict[str, Any]] = []
     english = english_search_query(query)
-    if english:
+    if _latin_terms(english):
         documents.extend(_wikipedia_lang("en", english, limit))
     russian_query = query.strip()
     if re.search(r"[а-яё]", russian_query.casefold()):

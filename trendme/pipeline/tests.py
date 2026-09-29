@@ -629,12 +629,12 @@ class PipelineTests(TestCase):
         self.assertEqual(self.run.high_confidence_count, 2)
 
     @patch("pipeline.services._predict")
-    def test_untranslated_query_records_error(self, predict_mock) -> None:
+    def test_unknown_russian_query_does_not_block(self, predict_mock) -> None:
         self.run.query = "топологические изоляторы"
         self.run.save(update_fields=["query"])
         self.run.documents.all().delete()
         finalize_search.run([], str(self.run.id))
         self.run.refresh_from_db()
         self.assertEqual(self.run.candidates.count(), 0)
-        self.assertTrue(any("query_not_translated" in error for error in self.run.errors))
+        self.assertFalse(any("query_not_translated" in error for error in self.run.errors))
         predict_mock.assert_not_called()

@@ -12,7 +12,7 @@ from difflib import SequenceMatcher
 from urllib.request import Request, urlopen
 
 from parser.models import SourceDocument
-from parser.services import SOURCE_QUERY_ALIASES, english_search_query, query_needs_translation
+from parser.services import SOURCE_QUERY_ALIASES, english_search_query
 
 from .models import SearchRun, TechnologyCandidate
 
@@ -58,6 +58,7 @@ ARTIFACT_RE = re.compile(
     r"experimental|experiment|readout|transducer|qubit|nv-center|"
     r"nitrogen-vacancy|apparatus|setup|accelerator|processor|memristor|"
     r"electrolyte|anode|cathode|chip-scale|on-chip|"
+    r"llm|large language|foundation model|agentic|moe\b|"
     r"прототип|устройств|детектор|экспериментальн|демонстрац|"
     r"мы представляем|мы сообщаем)\b",
     re.IGNORECASE,
@@ -71,9 +72,6 @@ INSTRUMENT_RE = re.compile(
     r"\b(?:using|with|via)\b.{0,48}\bquantum sensors?\b",
     re.IGNORECASE,
 )
-FIELD_ONLY_STEMS = frozenset({
-    "искусственн", "интеллект", "нейросет", "энерг", "технолог",
-})
 COMMERCIAL_RE = re.compile(
     r"\b(widely used|industry standard|mass production|commercially available|"
     r"mainstream|mature market|commodity)\b",
@@ -472,11 +470,6 @@ def _has_artifact(document: SourceDocument) -> bool:
     return bool(ARTIFACT_RE.search(f"{document.title} {document.abstract[:2000]}"))
 
 
-def _is_broad_query(query: str) -> bool:
-    matched = [stem for stem in QUERY_ALIASES if stem in query.casefold()]
-    return bool(matched) and all(stem in FIELD_ONLY_STEMS for stem in matched)
-
-
 def _is_instrument_use(title: str, query: str) -> bool:
     """«Изучаем Y with a <прибор запроса>» — это не проект по самому прибору."""
     english = english_search_query(query)
@@ -505,8 +498,6 @@ def _is_core_project(document: SourceDocument, query: str, query_terms: set[str]
         return False
     if not _has_project_abstract(document):
         return False
-    if _is_broad_query(query):
-        return bool(ARTIFACT_RE.search(document.title))
     return _has_artifact(document)
 
 
@@ -772,8 +763,6 @@ def build_candidates(run: SearchRun, industry_filter: str | None = None) -> tupl
 
     run.candidates.all().delete()
     errors: list[str] = []
-    if query_needs_translation(run.query):
-        errors.append("query_not_translated: нет английского соответствия запроса")
     created_count = weak_count = high_confidence_count = 0
     scored: list[tuple[dict, SourceDocument, list[SourceDocument], str, int, dict]] = []
     for group in grouped:

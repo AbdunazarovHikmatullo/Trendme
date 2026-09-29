@@ -19,12 +19,6 @@ const VISIBLE_WHEN_COLLAPSED = 15;
 
 function emptyStateCopy(run: SearchRun): { title: string; text: string } {
   const joined = run.errors.join(" ");
-  if (joined.includes("query_not_translated")) {
-    return {
-      title: "Запрос не удалось сопоставить с англоязычными источниками",
-      text: "Сформулируйте тему конкретнее или добавьте английский термин. Сырой кириллический запрос в arXiv и OpenAlex не отправляется.",
-    };
-  }
   if (joined.includes("no_projects_after_filters")) {
     return {
       title: "Источники нашлись, но проектов не осталось",
