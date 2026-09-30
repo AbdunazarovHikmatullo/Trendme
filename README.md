@@ -11,7 +11,7 @@
 | Сервис | Роль |
 |---|---|
 | `frontend` | Next.js, клиент к API |
-| `backend` | Django 6 + DRF: оркестрация, фильтры, карточки |
+| `backend` | Django 6 + DRF на порту **8080** внутри сети Compose; снаружи только через nginx `:80` |
 | `celery` | Параллельный сбор источников, финализация |
 | `ml` | FastAPI + sklearn: `/predict`, без поиска |
 | `db` | PostgreSQL 17 |
@@ -47,6 +47,8 @@ docker compose logs -f celery backend
 docker compose exec backend python manage.py test pipeline parser --verbosity=1
 docker compose restart nginx   # после recreate backend, иначе возможен 502 из-за старого DNS
 ```
+
+Django внутри compose слушает **8080** (`backend:8080`). Публичный API по-прежнему `http://localhost/api/` на порту 80.
 
 Остановка: `docker compose down`. Данные Postgres в volume `postgres_data`.
 

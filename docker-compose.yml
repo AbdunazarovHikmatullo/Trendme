@@ -45,8 +45,8 @@ services:
       redis:
         condition: service_healthy
     expose:
-      - "8000"
-    command: ["gunicorn", "trendme.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "1", "--timeout", "120"]
+      - "8080"
+    command: ["gunicorn", "trendme.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "1", "--timeout", "120"]
 
   celery:
     build: ./trendme

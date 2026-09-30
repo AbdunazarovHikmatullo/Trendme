@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8000
+EXPOSE 8080
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["gunicorn", "trendme.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120"]
+CMD ["gunicorn", "trendme.wsgi:application", "--bind", "0.0.0.0:8080", "--workers", "3", "--timeout", "120"]
